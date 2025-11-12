@@ -1,0 +1,6 @@
+@echo off
+echo Building application...
+mvn clean package -DskipTests
+echo Starting application...
+java -jar target/medical-app-backend-0.0.1-SNAPSHOT.jar
+pause

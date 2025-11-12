@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medical Admin Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css?v=20251003">
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- Load configuration and utilities first -->
+    <script src="js/config/constants.js?v=20251003"></script>
+    <script src="js/utils/api.js?v=20251003"></script>
+    <script src="admin-websocket.js"></script>
+    
+    <!-- Load components -->
+    <script type="text/babel" src="js/components/Login.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/Sidebar.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/Header.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/StatsGrid.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/MainPanel.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/SidePanel.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/PatientDetailsModal.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/BookTestModal.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/AddResultModal.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/PatientsView.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/AppointmentsView.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/ReportsView.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/PatientItem.js?v=20251003"></script>
+    <script type="text/babel" src="js/components/ChatSupportModal.js?v=20251003"></script>
+    
+    <!-- Main dashboard component -->
+    <script type="text/babel" src="js/components/Dashboard.js?v=20251003"></script>
+    
+    <!-- Initialize the app -->
+    <script type="text/babel" src="js/main.js?v=20251003"></script>
+</body>
+</html>

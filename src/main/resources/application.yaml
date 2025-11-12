@@ -1,0 +1,149 @@
+server:
+  port: ${PORT:8080}
+  address: 0.0.0.0
+
+spring:
+  datasource:
+    url: ${RDS_DB_URL:jdbc:mysql://localhost:3306/medical_app_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true}
+    username: ${RDS_USERNAME:root}
+    password: ${RDS_PASSWORD:your_password}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  
+  jpa:
+    hibernate:
+      ddl-auto: ${JPA_DDL_AUTO:update}
+    show-sql: ${SHOW_SQL:true}
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+        use_sql_comments: true
+    defer-datasource-initialization: true
+
+  # File upload configuration
+  servlet:
+    multipart:
+      enabled: true  
+      max-file-size: 500MB
+      max-request-size: 500MB
+
+  # Email configuration (for notifications)
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${MAIL_USERNAME:your_email@gmail.com}
+    password: ${MAIL_PASSWORD:your_gmail_app_password}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+# JWT Configuration
+jwt:
+  secret: ${JWT_SECRET:ChangeThisToYourOwnSecretKeyAtLeast256BitsLong}
+  expiration: ${JWT_EXPIRATION:86400000}
+
+# Application-specific configurations
+app:
+  # File storage
+  file:
+    upload-dir: uploads/results
+    export-dir: uploads/exports
+    max-size: 500MB
+
+  # Support system
+  support:
+    business-hours:
+      start: "09:00"
+      end: "18:00"
+    ticket-daily-limit: 5
+    response-time: "4-6 hours"
+    emergency-contact: "+234-XXX-XXXX"
+
+  # Export system
+  export:
+    storage-dir: exports
+    max-file-size: 500MB
+    retention-days: 7
+    allowed-formats: JSON,XML,CSV,FHIR,PDF
+
+  # Security settings
+  security:
+    cors:
+      allowed-origins: ${CORS_ORIGINS:*}
+      allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+      allowed-headers: "*"
+    
+  # Notification settings
+  notification:
+    sms:
+      enabled: true
+      provider: "twilio"
+      api-key: ${SMS_API_KEY:}
+    email:
+      enabled: true
+      from: "noreply@medicalapp.com"
+    push:
+      enabled: true
+
+# Logging configuration
+logging:
+  level:
+    com.medicalapp.medical_app_backend: ${LOG_LEVEL:DEBUG}
+    org.springframework.security: DEBUG
+    org.springframework.web: INFO
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/medical-app.log
+    max-size: 10MB
+    max-history: 30
+
+# Management endpoints for monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+# Profile-specific configurations
+---
+spring:
+  config:
+    activate:
+      on-profile: production
+
+  datasource:
+    url: ${RDS_DB_URL:jdbc:mysql://your-prod-db-host:3306/medical_app_db?useSSL=true}
+    username: ${RDS_USERNAME}
+    password: ${RDS_PASSWORD}
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+
+logging:
+  level:
+    com.medicalapp.medical_app_backend: INFO
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN
+
+app:
+  security:
+    cors:
+      allowed-origins: ${CORS_ORIGINS:https://your-production-domain.com}
