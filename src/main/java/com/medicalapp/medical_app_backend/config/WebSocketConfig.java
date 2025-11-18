@@ -2,6 +2,7 @@ package com.medicalapp.medical_app_backend.config;
 
 import com.medicalapp.medical_app_backend.config.JwtTokenUtil;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
@@ -33,6 +34,9 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Autowired
     private JwtTokenUtil jwtTokenUtil;
     
+    @Value("${app.security.cors.allowed-origins:*}")
+    private String allowedOrigins;
+    
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
         System.out.println("\n========== CONFIGURING MESSAGE BROKER ==========");
@@ -49,7 +53,6 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         System.out.println("========== MESSAGE BROKER CONFIGURED ==========\n");
     }
 
-    // Create reusable handshake interceptor
     private HandshakeInterceptor createAuthInterceptor() {
         return new HandshakeInterceptor() {
             @Override
@@ -64,7 +67,6 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                 if (request instanceof ServletServerHttpRequest) {
                     ServletServerHttpRequest servletRequest = (ServletServerHttpRequest) request;
                     
-                    // Extract token and userId from query parameters
                     String token = servletRequest.getServletRequest().getParameter("token");
                     String userId = servletRequest.getServletRequest().getParameter("userId");
                     
@@ -73,11 +75,9 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                     
                     if (token != null) {
                         try {
-                            // Validate token
                             String username = jwtTokenUtil.getUsernameFromToken(token);
                             System.out.println("✅ Token validated for user: " + username);
                             
-                            // Store in session attributes for later use
                             attributes.put("token", token);
                             attributes.put("username", username);
                             
@@ -123,20 +123,24 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         System.out.println("\n========== REGISTERING STOMP ENDPOINTS ==========");
+        System.out.println("🌐 Allowed origins: " + allowedOrigins);
         
-        // Register native WebSocket endpoint
+        String[] origins = allowedOrigins.split(",");
+        
+        // Register native WebSocket endpoint with CORS
         registry.addEndpoint("/ws")
+                .setAllowedOrigins(origins)
                 .setAllowedOriginPatterns("*")
                 .addInterceptors(createAuthInterceptor());
         
         System.out.println("✅ Native WebSocket endpoint registered: /ws");
         
-        // CRITICAL: Register SockJS fallback endpoint
-        // This is necessary for proper STOMP protocol handling
+        // Register SockJS fallback endpoint with CORS
         registry.addEndpoint("/ws")
+                .setAllowedOrigins(origins)
                 .setAllowedOriginPatterns("*")
                 .addInterceptors(createAuthInterceptor())
-                .withSockJS();  // Enable SockJS transport
+                .withSockJS();
         
         System.out.println("✅ SockJS fallback endpoint registered: /ws");
         System.out.println("====================================================\n");
@@ -148,7 +152,6 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
             @Override
             public Message<?> preSend(Message<?> message, MessageChannel channel) {
                 
-                // ===== ENHANCED LOGGING - LOG EVERY INCOMING MESSAGE =====
                 System.out.println("\n🔵🔵🔵 INCOMING MESSAGE 🔵🔵🔵");
                 System.out.println("Timestamp: " + new Date());
                 System.out.println("Message Type: " + (message != null ? message.getClass().getSimpleName() : "null"));
@@ -171,11 +174,9 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                     System.out.println("Destination: " + accessor.getDestination());
                     System.out.println("Native Headers: " + accessor.toNativeHeaderMap());
                     
-                    // ===== HANDLE CONNECT COMMAND =====
                     if (StompCommand.CONNECT.equals(command)) {
                         System.out.println("\n========== STOMP CONNECT FRAME RECEIVED ==========");
                         
-                        // Get username and userId from session attributes (set during handshake)
                         String username = null;
                         String userId = null;
                         
@@ -191,7 +192,6 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                         }
                         
                         if (username != null) {
-                            // Create authentication and set user principal
                             UsernamePasswordAuthenticationToken authentication = 
                                 new UsernamePasswordAuthenticationToken(
                                     username, 
@@ -208,11 +208,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                             System.err.println("❌ No username in session attributes - REJECTING CONNECTION");
                             System.err.println("💡 This usually means the WebSocket session wasn't properly initialized");
                             System.out.println("==========================================\n");
-                            return null; // Reject connection
+                            return null;
                         }
                     }
                     
-                    // ===== HANDLE SUBSCRIBE COMMAND =====
                     if (StompCommand.SUBSCRIBE.equals(command)) {
                         String destination = accessor.getDestination();
                         String username = accessor.getUser() != null ? accessor.getUser().getName() : "unknown";
@@ -223,14 +222,12 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                         System.out.println("==================================\n");
                     }
                     
-                    // ===== HANDLE SEND COMMAND =====
                     if (StompCommand.SEND.equals(command)) {
                         System.out.println("\n📤 ========== SEND ==========");
                         System.out.println("Destination: " + accessor.getDestination());
                         System.out.println("=============================\n");
                     }
                     
-                    // ===== HANDLE DISCONNECT COMMAND =====
                     if (StompCommand.DISCONNECT.equals(command)) {
                         String username = accessor.getUser() != null ? accessor.getUser().getName() : "unknown";
                         System.out.println("\n👋 ========== DISCONNECT ==========");

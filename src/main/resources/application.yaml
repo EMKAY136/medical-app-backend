@@ -4,9 +4,10 @@ server:
 
 spring:
   datasource:
-    url: ${RDS_DB_URL:jdbc:mysql://localhost:3306/medical_app_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true}
-    username: ${RDS_USERNAME:root}
-    password: ${RDS_PASSWORD:your_password}
+    # Railway MySQL connection - using Railway environment variables
+    url: jdbc:mysql://${MYSQLHOST:localhost}:${MYSQLPORT:3306}/${MYSQLDATABASE:medical_app_db}?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: ${MYSQLUSER:EMKAY}
+    password: ${MYSQLPASSWORD:mikel2006@}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 20
@@ -18,7 +19,7 @@ spring:
   jpa:
     hibernate:
       ddl-auto: ${JPA_DDL_AUTO:update}
-    show-sql: ${SHOW_SQL:true}
+    show-sql: ${SHOW_SQL:false}
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQL8Dialect
@@ -37,8 +38,8 @@ spring:
   mail:
     host: smtp.gmail.com
     port: 587
-    username: ${MAIL_USERNAME:your_email@gmail.com}
-    password: ${MAIL_PASSWORD:your_gmail_app_password}
+    username: ${MAIL_USERNAME:qualitestmedical@gmail.com}
+    password: ${MAIL_PASSWORD:qmlwmmjrtkczfgyc}
     properties:
       mail:
         smtp:
@@ -48,7 +49,7 @@ spring:
 
 # JWT Configuration
 jwt:
-  secret: ${JWT_SECRET:ChangeThisToYourOwnSecretKeyAtLeast256BitsLong}
+  secret: ${JWT_SECRET:MedicalAppSecretKeyForauthTokenGeneration2024ChangeThisInProduction}
   expiration: ${JWT_EXPIRATION:86400000}
 
 # Application-specific configurations
@@ -75,12 +76,15 @@ app:
     retention-days: 7
     allowed-formats: JSON,XML,CSV,FHIR,PDF
 
-  # Security settings
+  # Security settings - FIXED CORS
   security:
     cors:
-      allowed-origins: ${CORS_ORIGINS:*}
-      allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+      # Allow your Vercel frontend and localhost for testing
+      allowed-origins: ${CORS_ORIGINS:https://qualitest-admin.vercel.app,https://*.vercel.app,http://localhost:8000,http://localhost:3000}
+      allowed-methods: GET,POST,PUT,DELETE,OPTIONS,PATCH
       allowed-headers: "*"
+      allow-credentials: true
+      max-age: 3600
     
   # Notification settings
   notification:
@@ -97,18 +101,14 @@ app:
 # Logging configuration
 logging:
   level:
-    com.medicalapp.medical_app_backend: ${LOG_LEVEL:DEBUG}
-    org.springframework.security: DEBUG
+    com.medicalapp.medical_app_backend: ${LOG_LEVEL:INFO}
+    org.springframework.security: INFO
     org.springframework.web: INFO
-    org.hibernate.SQL: DEBUG
-    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    org.hibernate.SQL: WARN
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
-  file:
-    name: logs/medical-app.log
-    max-size: 10MB
-    max-history: 30
 
 # Management endpoints for monitoring
 management:
@@ -120,7 +120,7 @@ management:
     health:
       show-details: always
 
-# Profile-specific configurations
+# Production profile
 ---
 spring:
   config:
@@ -128,9 +128,9 @@ spring:
       on-profile: production
 
   datasource:
-    url: ${RDS_DB_URL:jdbc:mysql://your-prod-db-host:3306/medical_app_db?useSSL=true}
-    username: ${RDS_USERNAME}
-    password: ${RDS_PASSWORD}
+    url: jdbc:mysql://${MYSQLHOST}:${MYSQLPORT}/${MYSQLDATABASE}?useSSL=true&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: ${MYSQLUSER}
+    password: ${MYSQLPASSWORD}
 
   jpa:
     hibernate:
@@ -146,4 +146,7 @@ logging:
 app:
   security:
     cors:
-      allowed-origins: ${CORS_ORIGINS:https://your-production-domain.com}
+      allowed-origins: ${CORS_ORIGINS:https://qualitest-admin.vercel.app}
+      allowed-methods: GET,POST,PUT,DELETE,OPTIONS,PATCH
+      allowed-headers: "*"
+      allow-credentials: true

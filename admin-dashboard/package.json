@@ -1,0 +1,11 @@
+{
+  "name": "admin-dashboard",
+  "version": "1.0.0",
+  "description": "Medical Admin Dashboard",
+  "scripts": {
+    "build": "echo 'Static site - no build needed'"
+  },
+  "keywords": ["medical", "admin", "dashboard"],
+  "author": "",
+  "license": "ISC"
+}

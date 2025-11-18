@@ -46,15 +46,15 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
         
-        // Allow all origins for development - this fixes the CORS issue
-        configuration.setAllowedOriginPatterns(List.of("*"));
-        
-        // Alternative: If you want to be more specific, use this instead:
-        
+        // ✅ PRODUCTION READY: Allow specific origins
         configuration.setAllowedOrigins(Arrays.asList(
-            //Local development
+            // Production - Vercel deployment
+            "https://qualitest-admin.vercel.app",
+            "https://medical-admin-frontend.vercel.app",
+            
+            // Local development
             "http://localhost:3000",
-            "http://localhost:8000", // Your Python HTTP server
+            "http://localhost:8000",
             "http://localhost:8080",
             "http://localhost:8081",
             "http://127.0.0.1:3000",
@@ -62,48 +62,75 @@ public class SecurityConfig {
             "http://127.0.0.1:8080",
             "http://127.0.0.1:8081",
             
-            
             // Your network IPs
-            "http://192.168.29.145:3000",
-            "http://192.168.29.145:8000",
-            "http://192.168.29.145:8080",
-            "http://192.168.29.145:8081",
+            "http://192.168.58.145:3000",
+            "http://192.168.58.145:8000",
+            "http://192.168.58.145:8080",
+            "http://192.168.58.145:8081",
 
             // React Native specific
             "http://10.0.2.2:8081",
             "exp://localhost:8081",
-            "exp://192.168.29.145:8081",
+            "exp://192.168.58.145:8081",
             "capacitor://localhost",
-            "ionic://localhost",
-            
-            // File protocol support
-            "null"
+            "ionic://localhost"
         ));
         
+        // Also allow all Vercel preview deployments with pattern
+        configuration.setAllowedOriginPatterns(Arrays.asList(
+            "https://*.vercel.app",
+            "https://*.vercel.app/**"
+        ));
         
-        configuration.setAllowedMethods(Arrays.asList("*"));
+        // Allow all HTTP methods
+        configuration.setAllowedMethods(Arrays.asList(
+            "GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"
+        ));
+        
+        // Allow all headers
         configuration.setAllowedHeaders(Arrays.asList("*"));
+        
+        // Allow credentials (cookies, authorization headers)
         configuration.setAllowCredentials(true);
-        configuration.setExposedHeaders(Arrays.asList("Authorization"));
+        
+        // Expose these headers to the client
+        configuration.setExposedHeaders(Arrays.asList(
+            "Authorization", 
+            "Content-Type",
+            "X-Total-Count"
+        ));
+        
+        // How long the response from a pre-flight request can be cached
+        configuration.setMaxAge(3600L);
         
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
+        
         return source;
     }
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+            // Enable CORS with custom configuration
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+            
+            // Disable CSRF for stateless REST API
             .csrf(AbstractHttpConfigurer::disable)
+            
+            // Configure authorization rules
             .authorizeHttpRequests(auth -> auth
                 // Public endpoints - MUST be first in order
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/api/support/status").permitAll()
                 .requestMatchers("/api/support/faq").permitAll()
+                .requestMatchers("/api/health").permitAll()
                 .requestMatchers("/error").permitAll()
                 .requestMatchers("/actuator/health").permitAll()
                 .requestMatchers("/").permitAll()
+                
+                // WebSocket endpoints
+                .requestMatchers("/ws/**").permitAll()
                 
                 // Admin endpoints - require authentication
                 .requestMatchers("/api/admin/**").authenticated()
@@ -111,14 +138,26 @@ public class SecurityConfig {
                 // Other protected endpoints
                 .requestMatchers("/api/notifications/**").authenticated()
                 .requestMatchers("/api/users/**").authenticated()
+                .requestMatchers("/api/appointments/**").authenticated()
+                .requestMatchers("/api/results/**").authenticated()
                 
                 // Everything else requires authentication
                 .anyRequest().authenticated()
             )
-            .exceptionHandling(ex -> ex.authenticationEntryPoint(jwtAuthenticationEntryPoint))
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+            
+            // Configure exception handling
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint(jwtAuthenticationEntryPoint)
+            )
+            
+            // Stateless session management
+            .sessionManagement(session -> session
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+            );
 
+        // Add JWT filter before UsernamePasswordAuthenticationFilter
         http.addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
+        
         return http.build();
     }
 }
