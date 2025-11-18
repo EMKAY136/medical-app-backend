@@ -12,11 +12,12 @@ const AdminWebSocket = {
             return;
         }
         
-        // Use Railway WebSocket URL
+        // FIXED: Use CONFIG.WS_URL which should be HTTPS, not WSS
         const wsUrl = `${CONFIG.WS_URL}?token=${token}`;
         console.log('Connecting to WebSocket:', wsUrl);
         
         try {
+            // SockJS will automatically handle WebSocket protocol upgrade
             const socket = new SockJS(wsUrl);
             this.stompClient = Stomp.over(socket);
             

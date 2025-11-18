@@ -1,7 +1,8 @@
 const CONFIG = {
     API_BASE_URL: 'https://medical-app-backend-production-19dc.up.railway.app',
     ADMIN_API_URL: 'https://medical-app-backend-production-19dc.up.railway.app',
-    WS_URL: 'wss://medical-app-backend-production-19dc.up.railway.app/ws',
+    // FIXED: Use HTTPS instead of WSS - SockJS handles the WebSocket upgrade
+    WS_URL: 'https://medical-app-backend-production-19dc.up.railway.app/ws',
     TEST_TYPES: [
         'Blood Sugar Test',
         'Blood Pressure Check',
