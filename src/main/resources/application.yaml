@@ -76,12 +76,11 @@ app:
     retention-days: 7
     allowed-formats: JSON,XML,CSV,FHIR,PDF
 
-  # Security settings - FIXED CORS (NO WILDCARDS with credentials!)
+  # Security settings - FIXED: Using allowedOriginPatterns in SecurityConfig
   security:
     cors:
-      # List ALL your Vercel deployment URLs explicitly (no wildcards allowed with credentials)
-      # Add each preview/production URL as deployed
-      allowed-origins: ${CORS_ORIGINS:https://qualitest-admin.vercel.app,http://localhost:8000,http://localhost:3000,http://localhost:5173}
+      # Now supports wildcards because we're using setAllowedOriginPatterns() in SecurityConfig
+      allowed-origins: ${CORS_ORIGINS:https://qualitest-admin-1l49aqt190-akapomicheal2006-65l5s-projects.vercel.app,https://qualitest-admin.vercel.app,https://*.vercel.app,http://localhost:8000,http://localhost:3000,http://localhost:5173}
       allowed-methods: GET,POST,PUT,DELETE,OPTIONS,PATCH
       allowed-headers: "*"
       allow-credentials: true
@@ -148,9 +147,8 @@ logging:
 app:
   security:
     cors:
-      # IMPORTANT: List ALL your exact URLs here (no wildcards with credentials!)
-      # Add each Vercel preview URL as you deploy them
-      allowed-origins: ${CORS_ORIGINS:https://qualitest-admin.vercel.app,http://localhost:3000,http://localhost:8000,http://localhost:5173}
+      # Production CORS - includes all Vercel deployment URLs
+      allowed-origins: ${CORS_ORIGINS:https://qualitest-admin-1l49aqt190-akapomicheal2006-65l5s-projects.vercel.app,https://qualitest-admin.vercel.app,https://*.vercel.app,http://localhost:3000,http://localhost:8000,http://localhost:5173}
       allowed-methods: GET,POST,PUT,DELETE,OPTIONS,PATCH
       allowed-headers: "*"
       allow-credentials: true
