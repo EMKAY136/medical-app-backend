@@ -1,5 +1,5 @@
 // api.js - API Service for Medical Admin Dashboard
-console.log('📦 api.js VERSION 3.0 loading...');
+console.log('📦 api.js VERSION 5.0 loading...');
 
 const ApiService = {
     // Login function - handles authentication
@@ -8,16 +8,16 @@ const ApiService = {
         console.log('📧 Email:', email);
         console.log('🔑 Password length:', password?.length);
         
-        // Send both email and username since backend might expect either
+        // Backend checks for 'email' first
         const loginData = {
             email: email,
-            username: email,  // Some backends expect username instead of email
             password: password
         };
         
         console.log('📤 Sending login request:', JSON.stringify(loginData));
         
-        const url = `${CONFIG.API_BASE_URL}/auth/login`;
+        // Backend expects /api/auth/login
+        const url = `${CONFIG.API_BASE_URL}/api/auth/login`;
         console.log('🌐 URL:', url);
         
         try {
@@ -32,7 +32,7 @@ const ApiService = {
             console.log('📥 Response status:', response.status);
             
             const responseText = await response.text();
-            console.log('📥 Response body:', responseText);
+            console.log('📥 Response body:', responseText.substring(0, 200));
             
             if (!response.ok) {
                 let errorMessage = 'Authentication failed';
@@ -47,7 +47,7 @@ const ApiService = {
             }
             
             const data = JSON.parse(responseText);
-            console.log('✅ Login response:', data);
+            console.log('✅ Login successful!');
             
             // Store token if present
             if (data.token) {
@@ -66,7 +66,6 @@ const ApiService = {
     // Get auth headers for authenticated requests
     getAuthHeaders: function() {
         const token = localStorage.getItem('authToken');
-        console.log('Getting auth headers, token exists:', !!token);
         
         if (!token) {
             return {
@@ -82,7 +81,11 @@ const ApiService = {
 
     // Generic GET request
     get: async function(endpoint) {
-        const url = `${CONFIG.API_BASE_URL}${endpoint}`;
+        // Add /api prefix if not already present
+        const url = endpoint.startsWith('/api') 
+            ? `${CONFIG.API_BASE_URL}${endpoint}`
+            : `${CONFIG.API_BASE_URL}/api${endpoint}`;
+        
         console.log(`📥 GET ${url}`);
         
         try {
@@ -104,7 +107,11 @@ const ApiService = {
 
     // Generic POST request
     post: async function(endpoint, data) {
-        const url = `${CONFIG.API_BASE_URL}${endpoint}`;
+        // Add /api prefix if not already present
+        const url = endpoint.startsWith('/api') 
+            ? `${CONFIG.API_BASE_URL}${endpoint}`
+            : `${CONFIG.API_BASE_URL}/api${endpoint}`;
+        
         console.log(`📤 POST ${url}`);
         
         try {
@@ -127,7 +134,11 @@ const ApiService = {
 
     // Generic PUT request
     put: async function(endpoint, data) {
-        const url = `${CONFIG.API_BASE_URL}${endpoint}`;
+        // Add /api prefix if not already present
+        const url = endpoint.startsWith('/api') 
+            ? `${CONFIG.API_BASE_URL}${endpoint}`
+            : `${CONFIG.API_BASE_URL}/api${endpoint}`;
+        
         console.log(`📝 PUT ${url}`);
         
         try {
@@ -150,7 +161,11 @@ const ApiService = {
 
     // Generic DELETE request
     delete: async function(endpoint) {
-        const url = `${CONFIG.API_BASE_URL}${endpoint}`;
+        // Add /api prefix if not already present
+        const url = endpoint.startsWith('/api') 
+            ? `${CONFIG.API_BASE_URL}${endpoint}`
+            : `${CONFIG.API_BASE_URL}/api${endpoint}`;
+        
         console.log(`🗑️ DELETE ${url}`);
         
         try {
@@ -172,31 +187,30 @@ const ApiService = {
 
     // Fetch patients
     getPatients: async function(page = 0, size = 50) {
-        return await this.get(`/api/admin/patients?page=${page}&size=${size}`);
+        return await this.get(`/admin/patients?page=${page}&size=${size}`);
     },
 
     // Fetch appointments
     getAppointments: async function(page = 0, size = 50) {
-        return await this.get(`/api/admin/appointments?page=${page}&size=${size}`);
+        return await this.get(`/admin/appointments?page=${page}&size=${size}`);
     },
 
     // Fetch notifications
     getNotifications: async function() {
-        return await this.get('/api/admin/notifications');
+        return await this.get('/admin/notifications');
     },
 
     // Fetch auto notifications
     getAutoNotifications: async function() {
-        return await this.get('/api/admin/auto-notifications');
+        return await this.get('/admin/auto-notifications');
     },
 
     // Fetch test results
     getTestResults: async function(page = 0, size = 50) {
         console.log('Fetching test results from backend...');
-        const token = localStorage.getItem('authToken');
-        console.log('Getting auth headers, token exists:', !!token);
         
         try {
+            // Backend endpoint is /results/admin/all (no /api prefix)
             const response = await fetch(
                 `${CONFIG.API_BASE_URL}/results/admin/all?page=${page}&size=${size}`,
                 {
@@ -214,7 +228,7 @@ const ApiService = {
             }
             
             const data = await response.json();
-            console.log('Test results data:', data);
+            console.log('Test results loaded successfully');
             return data;
             
         } catch (error) {
@@ -225,17 +239,17 @@ const ApiService = {
 
     // Update patient
     updatePatient: async function(patientId, data) {
-        return await this.put(`/api/admin/patients/${patientId}`, data);
+        return await this.put(`/admin/patients/${patientId}`, data);
     },
 
     // Delete patient
     deletePatient: async function(patientId) {
-        return await this.delete(`/api/admin/patients/${patientId}`);
+        return await this.delete(`/admin/patients/${patientId}`);
     },
 
     // Update appointment
     updateAppointment: async function(appointmentId, data) {
-        return await this.put(`/api/admin/appointments/${appointmentId}`, data);
+        return await this.put(`/admin/appointments/${appointmentId}`, data);
     },
 
     // Logout
@@ -250,4 +264,4 @@ const ApiService = {
 
 // Make it globally available
 window.ApiService = ApiService;
-console.log('✅ ApiService VERSION 3.0 loaded and available globally');
+console.log('✅ ApiService VERSION 5.0 loaded and available globally');
