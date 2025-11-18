@@ -55,16 +55,12 @@ public class SecurityConfig {
         
         // Parse origins from application.yml
         String[] origins = allowedOrigins.split(",");
-        List<String> originList = Arrays.asList(origins);
         
-        System.out.println("Parsed origins: " + originList);
+        System.out.println("Parsed origins: " + Arrays.asList(origins));
         
-        // CRITICAL: When using setAllowCredentials(true), you CANNOT use patterns
-        // You must specify EXACT origins only
-        configuration.setAllowedOrigins(originList);
-        
-        // DO NOT USE setAllowedOriginPatterns with credentials!
-        // This causes CORS to fail with credentials
+        // FIXED: Use setAllowedOriginPatterns instead of setAllowedOrigins
+        // This allows wildcards (*) to work with credentials
+        configuration.setAllowedOriginPatterns(Arrays.asList(origins));
         
         // Allow all HTTP methods
         configuration.setAllowedMethods(Arrays.asList(
@@ -92,7 +88,7 @@ public class SecurityConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         
-        System.out.println("✅ CORS configured with exact origins only");
+        System.out.println("✅ CORS configured with allowedOriginPatterns (supports wildcards)");
         System.out.println("✅ Credentials allowed: true");
         System.out.println("==========================================\n");
         
