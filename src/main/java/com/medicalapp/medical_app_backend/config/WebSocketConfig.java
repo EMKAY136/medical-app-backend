@@ -131,23 +131,24 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         String[] origins = allowedOrigins.split(",");
         System.out.println("🌐 Parsed origins: " + Arrays.toString(origins));
         
-        // IMPORTANT: Do NOT use setAllowedOriginPatterns("*") with credentials!
-        // Only use exact origins
+        // FIXED: Use setAllowedOriginPatterns instead of setAllowedOrigins
+        // This allows wildcards (*) to work with credentials
         
         // Register native WebSocket endpoint with CORS
         registry.addEndpoint("/ws")
-                .setAllowedOrigins(origins)  // ONLY exact origins
+                .setAllowedOriginPatterns(origins)  // Changed from setAllowedOrigins
                 .addInterceptors(createAuthInterceptor());
         
         System.out.println("✅ Native WebSocket endpoint registered: /ws");
         
         // Register SockJS fallback endpoint with CORS
         registry.addEndpoint("/ws")
-                .setAllowedOrigins(origins)  // ONLY exact origins
+                .setAllowedOriginPatterns(origins)  // Changed from setAllowedOrigins
                 .addInterceptors(createAuthInterceptor())
                 .withSockJS();
         
         System.out.println("✅ SockJS fallback endpoint registered: /ws");
+        System.out.println("✅ WebSocket CORS configured with allowedOriginPatterns");
         System.out.println("📋 Configured for origins: " + Arrays.toString(origins));
         System.out.println("====================================================\n");
     }
