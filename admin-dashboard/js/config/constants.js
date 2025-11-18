@@ -1,6 +1,7 @@
 const CONFIG = {
-    API_BASE_URL: 'http://localhost:8080/api',
-    ADMIN_API_URL: 'http://localhost:8080/api/admin',
+    API_BASE_URL: 'https://medical-app-backend-production-19dc.up.railway.app',
+    ADMIN_API_URL: 'https://medical-app-backend-production-19dc.up.railway.app',
+    WS_URL: 'wss://medical-app-backend-production-19dc.up.railway.app/ws',
     TEST_TYPES: [
         'Blood Sugar Test',
         'Blood Pressure Check',
