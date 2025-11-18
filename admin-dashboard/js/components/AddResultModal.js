@@ -285,9 +285,9 @@ const AddResultModal = ({ patients, onClose, onSubmit }) => {
                 
                 const token = localStorage.getItem('authToken');
                 
-                console.log('Sending request to:', 'http://localhost:8080/api/results/admin/upload-with-file');
+                console.log('Sending request to:', `${CONFIG.ADMIN_API_URL}/api/results/admin/upload-with-file`);
                 
-                const response = await fetch('http://localhost:8080/api/results/admin/upload-with-file', {
+                const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/results/admin/upload-with-file`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`

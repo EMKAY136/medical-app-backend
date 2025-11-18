@@ -4,41 +4,62 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Medical Admin Dashboard</title>
+    
+    <!-- Load React and ReactDOM first -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Load Babel Standalone -->
+    <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+    
+    <!-- Other libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Font Awesome -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="css/styles.css?v=20251003">
+    
+    <!-- Your CSS -->
+    <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
     <div id="root"></div>
 
-    <!-- Load configuration and utilities first -->
-    <script src="js/config/constants.js?v=20251003"></script>
-    <script src="js/utils/api.js?v=20251003"></script>
+    <!-- ⚠️ CRITICAL: Load these FIRST before any React components -->
+    <script src="js/config/constants.js"></script>
+    <script src="js/utils/api.js"></script>
     <script src="admin-websocket.js"></script>
     
-    <!-- Load components -->
-    <script type="text/babel" src="js/components/Login.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/Sidebar.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/Header.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/StatsGrid.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/MainPanel.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/SidePanel.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/PatientDetailsModal.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/BookTestModal.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/AddResultModal.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/PatientsView.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/AppointmentsView.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/ReportsView.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/PatientItem.js?v=20251003"></script>
-    <script type="text/babel" src="js/components/ChatSupportModal.js?v=20251003"></script>
+    <!-- Now load React components with Babel -->
     
-    <!-- Main dashboard component -->
-    <script type="text/babel" src="js/components/Dashboard.js?v=20251003"></script>
+    <!-- 1. Base/Independent components -->
+    <script type="text/babel" src="js/components/Login.js"></script>
+    <script type="text/babel" src="js/components/Sidebar.js"></script>
+    <script type="text/babel" src="js/components/Header.js"></script>
+    <script type="text/babel" src="js/components/StatsGrid.js"></script>
     
-    <!-- Initialize the app -->
-    <script type="text/babel" src="js/main.js?v=20251003"></script>
+    <!-- 2. Modal components -->
+    <script type="text/babel" src="js/components/PatientDetailsModal.js"></script>
+    <script type="text/babel" src="js/components/BookTestModal.js"></script>
+    <script type="text/babel" src="js/components/AddResultModal.js"></script>
+    <script type="text/babel" src="js/components/ChatSupportModal.js"></script>
+    
+    <!-- 3. PatientItem -->
+    <script type="text/babel" src="js/components/PatientItem.js"></script>
+    
+    <!-- 4. Panel components -->
+    <script type="text/babel" src="js/components/MainPanel.js"></script>
+    <script type="text/babel" src="js/components/SidePanel.js"></script>
+    
+    <!-- 5. View components -->
+    <script type="text/babel" src="js/components/PatientsView.js"></script>
+    <script type="text/babel" src="js/components/AppointmentsView.js"></script>
+    <script type="text/babel" src="js/components/ReportsView.js"></script>
+    
+    <!-- 6. Main dashboard component -->
+    <script type="text/babel" src="js/components/Dashboard.js"></script>
+    
+    <!-- 7. Initialize the app (MUST BE LAST) -->
+    <script type="text/babel" src="js/main.js"></script>
 </body>
 </html>

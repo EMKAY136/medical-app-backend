@@ -76,7 +76,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         setLoading(true);
         
         // Replace this mock data with your actual API call
-        const response = await fetch('http://localhost:8080/api/support/admin/active-chats', {
+        const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/active-chats`, {
             headers: { 
                 'Authorization': `Bearer ${localStorage.getItem('authToken')}` 
             }

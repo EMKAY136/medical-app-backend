@@ -1,5 +1,6 @@
 package com.medicalapp.medical_app_backend.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -25,6 +26,9 @@ public class SecurityConfig {
 
     private final JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
     private final JwtRequestFilter jwtRequestFilter;
+    
+    @Value("${app.security.cors.allowed-origins}")
+    private String allowedOrigins;
 
     public SecurityConfig(JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint, 
                          JwtRequestFilter jwtRequestFilter) {
@@ -44,43 +48,23 @@ public class SecurityConfig {
 
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
+        System.out.println("\n========== SECURITY CONFIG CORS ==========");
+        System.out.println("Allowed origins from application.yml: " + allowedOrigins);
+        
         CorsConfiguration configuration = new CorsConfiguration();
         
-        // ✅ PRODUCTION READY: Allow specific origins
-        configuration.setAllowedOrigins(Arrays.asList(
-            // Production - Vercel deployment
-            "https://qualitest-admin.vercel.app",
-            "https://medical-admin-frontend.vercel.app",
-            
-            // Local development
-            "http://localhost:3000",
-            "http://localhost:8000",
-            "http://localhost:8080",
-            "http://localhost:8081",
-            "http://127.0.0.1:3000",
-            "http://127.0.0.1:8000",
-            "http://127.0.0.1:8080",
-            "http://127.0.0.1:8081",
-            
-            // Your network IPs
-            "http://192.168.58.145:3000",
-            "http://192.168.58.145:8000",
-            "http://192.168.58.145:8080",
-            "http://192.168.58.145:8081",
-
-            // React Native specific
-            "http://10.0.2.2:8081",
-            "exp://localhost:8081",
-            "exp://192.168.58.145:8081",
-            "capacitor://localhost",
-            "ionic://localhost"
-        ));
+        // Parse origins from application.yml
+        String[] origins = allowedOrigins.split(",");
+        List<String> originList = Arrays.asList(origins);
         
-        // Also allow all Vercel preview deployments with pattern
-        configuration.setAllowedOriginPatterns(Arrays.asList(
-            "https://*.vercel.app",
-            "https://*.vercel.app/**"
-        ));
+        System.out.println("Parsed origins: " + originList);
+        
+        // CRITICAL: When using setAllowCredentials(true), you CANNOT use patterns
+        // You must specify EXACT origins only
+        configuration.setAllowedOrigins(originList);
+        
+        // DO NOT USE setAllowedOriginPatterns with credentials!
+        // This causes CORS to fail with credentials
         
         // Allow all HTTP methods
         configuration.setAllowedMethods(Arrays.asList(
@@ -97,20 +81,28 @@ public class SecurityConfig {
         configuration.setExposedHeaders(Arrays.asList(
             "Authorization", 
             "Content-Type",
-            "X-Total-Count"
+            "X-Total-Count",
+            "Access-Control-Allow-Origin",
+            "Access-Control-Allow-Credentials"
         ));
         
-        // How long the response from a pre-flight request can be cached
+        // How long the response from a pre-flight request can be cached (1 hour)
         configuration.setMaxAge(3600L);
         
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
+        
+        System.out.println("✅ CORS configured with exact origins only");
+        System.out.println("✅ Credentials allowed: true");
+        System.out.println("==========================================\n");
         
         return source;
     }
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        System.out.println("\n========== CONFIGURING SECURITY FILTER CHAIN ==========");
+        
         http
             // Enable CORS with custom configuration
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -126,10 +118,11 @@ public class SecurityConfig {
                 .requestMatchers("/api/support/faq").permitAll()
                 .requestMatchers("/api/health").permitAll()
                 .requestMatchers("/error").permitAll()
-                .requestMatchers("/actuator/health").permitAll()
+                .requestMatchers("/actuator/health/**").permitAll()
+                .requestMatchers("/actuator/info").permitAll()
                 .requestMatchers("/").permitAll()
                 
-                // WebSocket endpoints
+                // WebSocket endpoints - must be public for initial handshake
                 .requestMatchers("/ws/**").permitAll()
                 
                 // Admin endpoints - require authentication
@@ -140,6 +133,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/users/**").authenticated()
                 .requestMatchers("/api/appointments/**").authenticated()
                 .requestMatchers("/api/results/**").authenticated()
+                .requestMatchers("/results/**").authenticated()
                 
                 // Everything else requires authentication
                 .anyRequest().authenticated()
@@ -157,6 +151,11 @@ public class SecurityConfig {
 
         // Add JWT filter before UsernamePasswordAuthenticationFilter
         http.addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
+        
+        System.out.println("✅ Security filter chain configured");
+        System.out.println("✅ CORS enabled from corsConfigurationSource()");
+        System.out.println("✅ JWT filter registered");
+        System.out.println("=======================================================\n");
         
         return http.build();
     }
