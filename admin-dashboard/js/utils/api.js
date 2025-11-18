@@ -8,8 +8,10 @@ const ApiService = {
         console.log('📧 Email:', email);
         console.log('🔑 Password length:', password?.length);
         
+        // Send both email and username since backend might expect either
         const loginData = {
             email: email,
+            username: email,  // Some backends expect username instead of email
             password: password
         };
         
