@@ -7,24 +7,40 @@ const Login = ({ onLoginSuccess }) => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        console.log('Form submitted with:', credentials);
+        console.log('🔐 Form submitted with:', { 
+            email: credentials.email, 
+            passwordLength: credentials.password?.length 
+        });
+        
         setLoading(true);
         setError('');
 
         try {
-            // ApiService.login() now returns parsed JSON data directly
-            const data = await ApiService.login(credentials);
+            // FIXED: Pass email and password as separate parameters
+            const data = await ApiService.login(credentials.email, credentials.password);
             
-            console.log('Login successful:', data);
+            console.log('✅ Login successful:', data);
             
-            // The token is already stored by ApiService.login(), but store user info
-            localStorage.setItem('authToken', data.token); // Changed to match Dashboard
-            localStorage.setItem('user_info', JSON.stringify(data.user || { email: credentials.email }));
+            // Store authentication data
+            if (data.token) {
+                localStorage.setItem('authToken', data.token);
+                console.log('✅ Token stored');
+            }
+            
+            if (data.user) {
+                localStorage.setItem('user_info', JSON.stringify(data.user));
+                console.log('✅ User info stored');
+            } else {
+                // Fallback if no user object returned
+                localStorage.setItem('user_info', JSON.stringify({ email: credentials.email }));
+            }
+            
+            // Trigger the success callback
             onLoginSuccess();
             
         } catch (error) {
-            console.error('Login error:', error);
-            setError(error.message || 'Login failed');
+            console.error('❌ Login error:', error);
+            setError(error.message || 'Login failed. Please check your credentials.');
         } finally {
             setLoading(false);
         }
@@ -55,6 +71,7 @@ const Login = ({ onLoginSuccess }) => {
                             className="form-input"
                             value={credentials.email}
                             onChange={(e) => setCredentials({...credentials, email: e.target.value})}
+                            placeholder="admin@example.com"
                             required
                         />
                     </div>
@@ -65,11 +82,23 @@ const Login = ({ onLoginSuccess }) => {
                             className="form-input"
                             value={credentials.password}
                             onChange={(e) => setCredentials({...credentials, password: e.target.value})}
+                            placeholder="Enter your password"
                             required
                         />
                     </div>
-                    <button type="submit" className="btn btn-primary" disabled={loading} style={{width: '100%'}}>
-                        {loading ? <div className="spinner" style={{width: '20px', height: '20px'}}></div> : 'Login'}
+                    <button 
+                        type="submit" 
+                        className="btn btn-primary" 
+                        disabled={loading} 
+                        style={{width: '100%'}}
+                    >
+                        {loading ? (
+                            <div className="spinner" style={{width: '20px', height: '20px'}}></div>
+                        ) : (
+                            <>
+                                <i className="fas fa-sign-in-alt"></i> Login
+                            </>
+                        )}
                     </button>
                 </form>
             </div>
