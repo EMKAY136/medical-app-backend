@@ -122,26 +122,36 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
             }
         };
     }
-@Override
-public void registerStompEndpoints(StompEndpointRegistry registry) {
-    System.out.println("\n========== REGISTERING STOMP ENDPOINTS ==========");
-    System.out.println("🌐 Allowed origins: " + allowedOrigins);
-    
-    String[] origins = allowedOrigins.split(",");
-    
-    // Use setAllowedOrigins (NOT Patterns) for exact origins
-    registry.addEndpoint("/ws")
-            .setAllowedOrigins(origins)  // Changed back to setAllowedOrigins
-            .addInterceptors(createAuthInterceptor());
-    
-    registry.addEndpoint("/ws")
-            .setAllowedOrigins(origins)  // Changed back to setAllowedOrigins
-            .addInterceptors(createAuthInterceptor())
-            .withSockJS();
-    
-    System.out.println("✅ WebSocket endpoints registered");
-    System.out.println("====================================================\n");
-}
+
+    @Override
+    public void registerStompEndpoints(StompEndpointRegistry registry) {
+        System.out.println("\n========== REGISTERING STOMP ENDPOINTS ==========");
+        System.out.println("🌐 Allowed origins: " + allowedOrigins);
+        
+        String[] origins = allowedOrigins.split(",");
+        System.out.println("🌐 Parsed origins: " + Arrays.toString(origins));
+        
+        // FIXED: Use setAllowedOriginPatterns instead of setAllowedOrigins
+        // This allows wildcards (*) to work with credentials
+        
+        // Register native WebSocket endpoint with CORS
+        registry.addEndpoint("/ws")
+                .setAllowedOriginPatterns(origins)  // Changed from setAllowedOrigins
+                .addInterceptors(createAuthInterceptor());
+        
+        System.out.println("✅ Native WebSocket endpoint registered: /ws");
+        
+        // Register SockJS fallback endpoint with CORS
+        registry.addEndpoint("/ws")
+                .setAllowedOriginPatterns(origins)  // Changed from setAllowedOrigins
+                .addInterceptors(createAuthInterceptor())
+                .withSockJS();
+        
+        System.out.println("✅ SockJS fallback endpoint registered: /ws");
+        System.out.println("✅ WebSocket CORS configured with allowedOriginPatterns");
+        System.out.println("📋 Configured for origins: " + Arrays.toString(origins));
+        System.out.println("====================================================\n");
+    }
     
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
