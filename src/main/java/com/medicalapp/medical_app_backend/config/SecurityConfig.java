@@ -58,8 +58,7 @@ public class SecurityConfig {
         
         System.out.println("Parsed origins: " + Arrays.asList(origins));
         
-        // FIXED: Use setAllowedOriginPatterns instead of setAllowedOrigins
-        // This allows wildcards (*) to work with credentials
+        // Use setAllowedOriginPatterns to support wildcards with credentials
         configuration.setAllowedOriginPatterns(Arrays.asList(origins));
         
         // Allow all HTTP methods
@@ -108,31 +107,36 @@ public class SecurityConfig {
             
             // Configure authorization rules
             .authorizeHttpRequests(auth -> auth
-                // Public endpoints - MUST be first in order
-                .requestMatchers("/api/auth/**").permitAll()
-                .requestMatchers("/auth/**").permitAll()  // ✅ ADDED: Allow /auth/login without /api prefix
-                .requestMatchers("/api/support/status").permitAll()
-                .requestMatchers("/api/support/faq").permitAll()
+                // ✅ CRITICAL: Public auth endpoints - MUST be first
+                           // Matches /auth/login, /auth/register
+                .requestMatchers("/api/auth/**").permitAll()       // Matches /api/auth/login, etc.
+                
+                // ✅ Public support endpoints
+                .requestMatchers("/api/support/**").permitAll()
+                
+                // ✅ Health check endpoints
                 .requestMatchers("/api/health").permitAll()
-                .requestMatchers("/error").permitAll()
                 .requestMatchers("/actuator/health/**").permitAll()
                 .requestMatchers("/actuator/info").permitAll()
+                
+                // ✅ Error handling
+                .requestMatchers("/error").permitAll()
                 .requestMatchers("/").permitAll()
                 
-                // WebSocket endpoints - must be public for initial handshake
+                // ✅ WebSocket endpoints - public for initial handshake
                 .requestMatchers("/ws/**").permitAll()
                 
-                // Admin endpoints - require authentication
+                // 🔒 Protected admin endpoints
                 .requestMatchers("/api/admin/**").authenticated()
                 
-                // Other protected endpoints
+                // 🔒 Protected user endpoints
                 .requestMatchers("/api/notifications/**").authenticated()
                 .requestMatchers("/api/users/**").authenticated()
                 .requestMatchers("/api/appointments/**").authenticated()
                 .requestMatchers("/api/results/**").authenticated()
                 .requestMatchers("/results/**").authenticated()
                 
-                // Everything else requires authentication
+                // 🔒 Everything else requires authentication
                 .anyRequest().authenticated()
             )
             
@@ -150,6 +154,11 @@ public class SecurityConfig {
         http.addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
         
         System.out.println("✅ Security filter chain configured");
+        System.out.println("✅ Public endpoints:");
+        System.out.println("   - /auth/** (including /auth/login)");
+        System.out.println("   - /api/auth/** (including /api/auth/login)");
+        System.out.println("   - /api/support/**");
+        System.out.println("   - /ws/**");
         System.out.println("✅ CORS enabled from corsConfigurationSource()");
         System.out.println("✅ JWT filter registered");
         System.out.println("=======================================================\n");
