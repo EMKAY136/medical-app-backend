@@ -4,7 +4,7 @@
 const ApiService = {
     // Authentication
     login: async (credentials) => {
-        console.log('🔐 Making POST request to:', `${CONFIG.API_BASE_URL}/api/auth/login`);
+        console.log('Making POST request to:', `${CONFIG.API_BASE_URL}/api/auth/login`);
         const response = await fetch(`${CONFIG.API_BASE_URL}/api/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -24,14 +24,15 @@ const ApiService = {
         if (data.token) {
             localStorage.setItem('authToken', data.token);
             console.log('Token stored successfully');
+            
+            if (data.user) {
+                localStorage.setItem('userId', data.user.id);
+                localStorage.setItem('userEmail', data.user.email);
+                localStorage.setItem('userRole', data.user.role);
+                console.log('User data stored');
+            }
         } else {
             console.error('No token found in response!');
-        }
-        
-        if (data.user) {
-            localStorage.setItem('userId', data.user.id);
-            localStorage.setItem('userEmail', data.user.email);
-            localStorage.setItem('userRole', data.user.role);
         }
         
         return data;
