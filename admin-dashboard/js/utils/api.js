@@ -4,11 +4,12 @@
 const ApiService = {
     // Authentication
     login: async (credentials) => {
-        console.log('Making POST request to:', `${CONFIG.API_BASE_URL}/auth/login`);
-        const response = await fetch(`${CONFIG.API_BASE_URL}/auth/login`, {
+        console.log('🔐 Making POST request to:', `${CONFIG.API_BASE_URL}/api/auth/login`);
+        const response = await fetch(`${CONFIG.API_BASE_URL}/api/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(credentials)
+            body: JSON.stringify(credentials),
+            credentials: 'include'
         });
         console.log('Response status:', response.status);
         
@@ -27,11 +28,20 @@ const ApiService = {
             console.error('No token found in response!');
         }
         
+        if (data.user) {
+            localStorage.setItem('userId', data.user.id);
+            localStorage.setItem('userEmail', data.user.email);
+            localStorage.setItem('userRole', data.user.role);
+        }
+        
         return data;
     },
 
     logout: () => {
         localStorage.removeItem('authToken');
+        localStorage.removeItem('userId');
+        localStorage.removeItem('userEmail');
+        localStorage.removeItem('userRole');
         console.log('User logged out, token removed');
     },
 
@@ -54,9 +64,10 @@ const ApiService = {
     getPatients: async (page = 0, size = 50) => {
         console.log('Fetching patients from backend...');
         try {
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/patients?page=${page}&size=${size}`, {
+            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/patients?page=${page}&size=${size}`, {
                 method: 'GET',
-                headers: ApiService.getAuthHeaders()
+                headers: ApiService.getAuthHeaders(),
+                credentials: 'include'
             });
             
             console.log('Patients response status:', response.status);
@@ -121,14 +132,15 @@ const ApiService = {
     getAppointments: async (page = 0, size = 50, patientId = null) => {
         console.log('Fetching appointments from backend...');
         try {
-            let url = `${CONFIG.ADMIN_API_URL}/appointments?page=${page}&size=${size}`;
+            let url = `${CONFIG.ADMIN_API_URL}/api/admin/appointments?page=${page}&size=${size}`;
             if (patientId) {
                 url += `&patientId=${patientId}`;
             }
             
             const response = await fetch(url, {
                 method: 'GET',
-                headers: ApiService.getAuthHeaders()
+                headers: ApiService.getAuthHeaders(),
+                credentials: 'include'
             });
             
             console.log('Appointments response status:', response.status);
@@ -155,7 +167,8 @@ const ApiService = {
         try {
             const response = await fetch(`${CONFIG.API_BASE_URL}/results/admin/all?page=${page}&size=${size}`, {
                 method: 'GET',
-                headers: ApiService.getAuthHeaders()
+                headers: ApiService.getAuthHeaders(),
+                credentials: 'include'
             });
             
             console.log('Test results response status:', response.status);
@@ -205,7 +218,8 @@ const ApiService = {
         const response = await fetch(`${CONFIG.API_BASE_URL}/results/admin/upload`, {
             method: 'POST',
             headers: ApiService.getAuthHeaders(),
-            body: JSON.stringify(backendData)
+            body: JSON.stringify(backendData),
+            credentials: 'include'
         });
         
         if (!response.ok) {
@@ -220,9 +234,10 @@ const ApiService = {
     getStatistics: async () => {
         console.log('Fetching statistics...');
         try {
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/stats`, {
+            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/stats`, {
                 method: 'GET',
-                headers: ApiService.getAuthHeaders()
+                headers: ApiService.getAuthHeaders(),
+                credentials: 'include'
             });
             
             if (response.status === 401) {
