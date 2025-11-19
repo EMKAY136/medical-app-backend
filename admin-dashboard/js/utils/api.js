@@ -16,8 +16,8 @@ const ApiService = {
         
         console.log('📤 Sending login request:', JSON.stringify(loginData));
         
-        // Backend expects /api/auth/login
-        const url = `${CONFIG.API_BASE_URL}/api/auth/login`;
+        // Backend expects /auth/login
+        const url = `${CONFIG.API_BASE_URL}/auth/login`;
         console.log('🌐 URL:', url);
         
         try {
