@@ -110,6 +110,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 // Public endpoints - MUST be first in order
                 .requestMatchers("/api/auth/**").permitAll()
+                .requestMatchers("/auth/**").permitAll()  // ✅ ADDED: Allow /auth/login without /api prefix
                 .requestMatchers("/api/support/status").permitAll()
                 .requestMatchers("/api/support/faq").permitAll()
                 .requestMatchers("/api/health").permitAll()
