@@ -15,8 +15,8 @@ public class AutoNotification {
     
     @NotBlank
     @Size(max = 100)
-    @Column(nullable = false)
-    private String trigger; // "appointment_scheduled", "results_ready", etc.
+    @Column(name = "`trigger`", nullable = false)
+    private String trigger;
     
     @NotBlank
     @Size(max = 200)
