@@ -1,61 +1,209 @@
 // js/utils/api.js
-// Note: CONFIG is loaded from constants.js which must be loaded before this file
+// Fixed API configuration with CORS debugging
+// Note: CONFIG must be defined in constants.js before this file loads
 
 const ApiService = {
-    // Authentication - FIXED to accept email and password separately
+    
+    // ✅ Authentication - Fixed with CORS debugging
     login: async (email, password) => {
-        console.log('Making POST request to:', `${CONFIG.API_BASE_URL}/auth/login`);
-        console.log('Login credentials:', { email, passwordLength: password?.length });
+        const loginUrl = `${CONFIG.API_BASE_URL}/auth/login`;
         
-        const response = await fetch(`${CONFIG.API_BASE_URL}/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password }) // Pack into object
-        });
+        console.log('========== LOGIN REQUEST ==========');
+        console.log('📍 URL:', loginUrl);
+        console.log('📧 Email:', email);
+        console.log('🔐 Password length:', password?.length || 0);
+        console.log('🌐 Frontend origin:', window.location.origin);
+        console.log('🌐 Frontend URL:', window.location.href);
         
-        console.log('Response status:', response.status);
-        
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.message || 'Login failed');
-        }
-        
-        const data = await response.json();
-        console.log('Full login response:', data);
-        
-        if (data.token) {
+        try {
+            const response = await fetch(loginUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                credentials: 'include', // Include cookies if needed
+                body: JSON.stringify({
+                    email: email.trim(),
+                    password: password
+                })
+            });
+
+            console.log('📊 Response Status:', response.status, response.statusText);
+            
+            // Log CORS and auth headers
+            console.log('📋 Response Headers (CORS & Auth):');
+            const headersToLog = [
+                'access-control-allow-origin',
+                'access-control-allow-credentials',
+                'access-control-allow-methods',
+                'access-control-allow-headers',
+                'authorization',
+                'content-type'
+            ];
+            
+            headersToLog.forEach(header => {
+                const value = response.headers.get(header);
+                if (value) {
+                    console.log(`  ${header}: ${value}`);
+                }
+            });
+
+            // Handle response status
+            if (response.status === 0) {
+                console.error('❌ CORS Error: Request blocked by browser');
+                console.error('🚨 This means the backend is not sending CORS headers');
+                throw new Error('CORS Error: Backend CORS configuration may be incorrect');
+            }
+
+            if (!response.ok) {
+                let errorData = {};
+                try {
+                    errorData = await response.json();
+                } catch (e) {
+                    errorData = { message: response.statusText };
+                }
+                
+                console.error('❌ Login failed:');
+                console.error('  Status:', response.status);
+                console.error('  Error:', errorData);
+                
+                const errorMessage = errorData.message || errorData.error || `Login failed: ${response.status}`;
+                throw new Error(errorMessage);
+            }
+
+            const data = await response.json();
+            
+            console.log('✅ Login successful!');
+            console.log('🔑 Token present:', !!data.token);
+            console.log('👤 User:', data.user?.email || 'Unknown');
+            console.log('===================================');
+            
+            // Validate response has token
+            if (!data.token) {
+                console.error('❌ Response has no token!');
+                console.error('Response data:', data);
+                throw new Error('No authentication token received from server');
+            }
+            
+            // Store token and user data
             localStorage.setItem('authToken', data.token);
-            console.log('Token stored successfully');
-        } else {
-            console.error('No token found in response!');
+            if (data.user) {
+                localStorage.setItem('user', JSON.stringify(data.user));
+            }
+            localStorage.setItem('loginTime', new Date().toISOString());
+            
+            console.log('✅ Token stored in localStorage');
+            console.log('✅ User data stored');
+            
+            return {
+                success: true,
+                token: data.token,
+                user: data.user,
+                message: 'Login successful'
+            };
+
+        } catch (error) {
+            console.error('❌ Login failed with exception:');
+            console.error('  Message:', error.message);
+            console.error('  Stack:', error.stack);
+            
+            // Provide specific error guidance
+            if (error.message.includes('CORS')) {
+                console.error('\n🚨 CORS Problem Detected:');
+                console.error('  Frontend origin:', window.location.origin);
+                console.error('  Backend URL:', CONFIG.API_BASE_URL);
+                console.error('  ➜ Make sure backend CORS_ORIGINS includes:', window.location.origin);
+                console.error('  ➜ Check Railway environment variables');
+                console.error('  ➜ Restart backend after changing CORS_ORIGINS');
+            } else if (error.message.includes('Failed to fetch')) {
+                console.error('\n🚨 Network Problem Detected:');
+                console.error('  Backend might be down or unreachable');
+                console.error('  Backend URL:', CONFIG.API_BASE_URL);
+                console.error('  ➜ Check Railway deployment status');
+                console.error('  ➜ Check if backend service is running');
+                console.error('  ➜ Try the health endpoint: ' + CONFIG.API_BASE_URL + '/health');
+            } else if (error.message.includes('401') || error.message.includes('Invalid')) {
+                console.error('\n🚨 Authentication Problem:');
+                console.error('  Check email and password are correct');
+                console.error('  Check user exists in database');
+            }
+            
+            throw error;
         }
-        
-        return data;
     },
 
     logout: () => {
+        console.log('👋 Logging out...');
         localStorage.removeItem('authToken');
-        console.log('User logged out, token removed');
+        localStorage.removeItem('user');
+        localStorage.removeItem('loginTime');
+        console.log('✅ User logged out, tokens cleared');
+    },
+
+    // Get stored token
+    getToken: () => {
+        return localStorage.getItem('authToken');
+    },
+
+    // Get stored user data
+    getUser: () => {
+        const userJson = localStorage.getItem('user');
+        return userJson ? JSON.parse(userJson) : null;
+    },
+
+    // Check if authenticated
+    isAuthenticated: () => {
+        const token = localStorage.getItem('authToken');
+        return !!token && token.length > 0;
     },
 
     // Helper method to get auth headers
     getAuthHeaders: () => {
-        const token = localStorage.getItem('authToken');
-        console.log('Getting auth headers, token exists:', !!token);
+        const token = ApiService.getToken();
         return {
             'Content-Type': 'application/json',
+            'Accept': 'application/json',
             'Authorization': token ? `Bearer ${token}` : ''
         };
     },
 
-    // Check if user is authenticated
-    isAuthenticated: () => {
-        return !!localStorage.getItem('authToken');
+    // Generic API request with error handling
+    apiRequest: async (endpoint, options = {}) => {
+        const url = `${CONFIG.API_BASE_URL}${endpoint}`;
+        const headers = {
+            ...ApiService.getAuthHeaders(),
+            ...options.headers,
+        };
+
+        try {
+            const response = await fetch(url, {
+                ...options,
+                headers,
+                credentials: 'include',
+            });
+
+            if (response.status === 401) {
+                console.warn('⚠️ Unauthorized - token expired or invalid');
+                ApiService.logout();
+                throw new Error('Session expired. Please login again.');
+            }
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({ message: response.statusText }));
+                throw new Error(error.message || `API Error: ${response.status}`);
+            }
+
+            return response.json();
+        } catch (error) {
+            console.error('API request failed:', error);
+            throw error;
+        }
     },
 
     // Patients
     getPatients: async (page = 0, size = 50) => {
-        console.log('Fetching patients from backend...');
+        console.log('📥 Fetching patients...');
         try {
             const response = await fetch(`${CONFIG.ADMIN_API_URL}/patients?page=${page}&size=${size}`, {
                 method: 'GET',
@@ -122,7 +270,7 @@ const ApiService = {
 
     // Appointments
     getAppointments: async (page = 0, size = 50, patientId = null) => {
-        console.log('Fetching appointments from backend...');
+        console.log('📥 Fetching appointments...');
         try {
             let url = `${CONFIG.ADMIN_API_URL}/appointments?page=${page}&size=${size}`;
             if (patientId) {
@@ -154,7 +302,7 @@ const ApiService = {
 
     // Test Results
     getTestResults: async (page = 0, size = 50) => {
-        console.log('Fetching test results from backend...');
+        console.log('📥 Fetching test results...');
         try {
             const response = await fetch(`${CONFIG.API_BASE_URL}/results/admin/all?page=${page}&size=${size}`, {
                 method: 'GET',
@@ -193,7 +341,7 @@ const ApiService = {
 
     // Add test result
     addTestResult: async (resultData) => {
-        console.log('=== ADDING TEST RESULT ===');
+        console.log('📤 Adding test result:', resultData);
         
         const backendData = {
             patientId: parseInt(resultData.patientId),
@@ -221,7 +369,7 @@ const ApiService = {
 
     // Statistics
     getStatistics: async () => {
-        console.log('Fetching statistics...');
+        console.log('📊 Fetching statistics...');
         try {
             const response = await fetch(`${CONFIG.ADMIN_API_URL}/stats`, {
                 method: 'GET',
@@ -257,3 +405,6 @@ const ApiService = {
 
 // Make ApiService globally available
 window.ApiService = ApiService;
+console.log('✅ ApiService initialized');
+console.log('   Backend URL:', CONFIG.API_BASE_URL);
+console.log('   Admin API URL:', CONFIG.ADMIN_API_URL);
