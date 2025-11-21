@@ -170,7 +170,7 @@ const loadPatients = async () => {
         
         // Make the request directly instead of using ApiService
         const response = await fetch(
-            `${CONFIG.ADMIN_API_URL}/patients?page=0&size=50`,
+            `${CONFIG.ADMIN_API_URL}/api/patients?page=0&size=50`,
             {
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -206,7 +206,7 @@ const loadPatients = async () => {
             const token = localStorage.getItem('authToken');
 
             const response = await fetch(
-                `${CONFIG.ADMIN_API_URL}/appointments?page=0&size=50`,
+                `${CONFIG.ADMIN_API_URL}/api/appointments?page=0&size=50`,
                 {
                     headers: {
                         'Authorization': `Bearer ${token}`,
@@ -250,7 +250,7 @@ const loadPatients = async () => {
     const loadNotifications = async () => {
         try {
             const token = localStorage.getItem('authToken');
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/notifications`, {
+            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/notifications`, {
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',
@@ -268,7 +268,7 @@ const loadPatients = async () => {
     const loadAutoNotifications = async () => {
         try {
             const token = localStorage.getItem('authToken');
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/auto-notifications`, {
+            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/auto-notifications`, {
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',
@@ -299,8 +299,8 @@ const loadPatients = async () => {
         try {
             const token = localStorage.getItem('authToken');
             const endpoint = formData.sendToAll 
-                ? `${CONFIG.ADMIN_API_URL}/notifications/send-all`
-                : `${CONFIG.ADMIN_API_URL}/notifications/send`;
+                ? `${CONFIG.ADMIN_API_URL}/api/notifications/send-all`
+                : `${CONFIG.ADMIN_API_URL}/api/notifications/send`;
 
             const payload = formData.sendToAll
                 ? { title: formData.title, message: formData.message, type: formData.type }
@@ -370,7 +370,7 @@ const loadPatients = async () => {
         if (window.confirm('Are you sure?')) {
             try {
                 const token = localStorage.getItem('authToken');
-                const response = await fetch(`${CONFIG.ADMIN_API_URL}/notifications/${notificationId}`, {
+                const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/notifications/${notificationId}`, {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${token}` },
                 });
@@ -388,7 +388,7 @@ const loadPatients = async () => {
     const handleToggleAutoNotification = async (autoNotifId, currentStatus) => {
         try {
             const token = localStorage.getItem('authToken');
-            const response = await fetch(`${CONFIG.API_BASE_URL}/auto-notifications/${autoNotifId}/toggle`, {
+            const response = await fetch(`${CONFIG.API_BASE_URL}/api/auto-notifications/${autoNotifId}/toggle`, {
                 method: 'PUT',
                 headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled: !currentStatus }),
@@ -406,7 +406,7 @@ const loadPatients = async () => {
         if (window.confirm('Are you sure?')) {
             try {
                 const token = localStorage.getItem('authToken');
-                const response = await fetch(`${CONFIG.ADMIN_API_URL}/auto-notifications/${autoNotifId}`, {
+                const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/auto-notifications/${autoNotifId}`, {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${token}` },
                 });
@@ -478,7 +478,7 @@ const loadPatients = async () => {
                 formData.append('file', file);
                 
                 const token = localStorage.getItem('authToken');
-                const fetchResponse = await fetch(`${CONFIG.API_BASE_URL}/results/admin/upload-with-file`, {
+                const fetchResponse = await fetch(`${CONFIG.API_BASE_URL}/api/results/admin/upload-with-file`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`
