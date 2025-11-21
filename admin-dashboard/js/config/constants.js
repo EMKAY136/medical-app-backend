@@ -1,7 +1,7 @@
 const CONFIG = {
     // FIXED: Added /api prefix to match backend endpoints
-    API_BASE_URL: 'https://medical-app-backend-production-19dc.up.railway.app/api',
-    ADMIN_API_URL: 'https://medical-app-backend-production-19dc.up.railway.app/api/admin',
+    API_BASE_URL: 'https://medical-app-backend-production-19dc.up.railway.app',
+    ADMIN_API_URL: 'https://medical-app-backend-production-19dc.up.railway.app',
     // WebSocket URL - SockJS handles the upgrade
     WS_URL: 'https://medical-app-backend-production-19dc.up.railway.app/ws',
     TEST_TYPES: [
