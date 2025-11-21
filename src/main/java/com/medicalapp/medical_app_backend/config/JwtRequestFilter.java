@@ -35,27 +35,35 @@ public class JwtRequestFilter extends OncePerRequestFilter {
                                   FilterChain chain) throws ServletException, IOException {
 
         final String requestPath = request.getRequestURI();
+        final String method = request.getMethod();
 
-        logger.debug("Processing request: {} {}", request.getMethod(), requestPath);
+        logger.debug("Processing request: {} {}", method, requestPath);
 
-        String username = null;
-        String jwtToken = null;
-
-        // Check if this is a public endpoint
-        if (isPublicEndpoint(requestPath)) {
-            logger.debug("Public endpoint detected: {}", requestPath);
+        // ✅ CRITICAL: Skip OPTIONS preflight requests - they don't have auth headers
+        if ("OPTIONS".equalsIgnoreCase(method)) {
+            logger.debug("✅ OPTIONS preflight request - skipping JWT validation: {}", requestPath);
             chain.doFilter(request, response);
             return;
         }
 
-        // 🔥 NEW: Try to get JWT token from Authorization header first
+        String username = null;
+        String jwtToken = null;
+
+        // Check if this is a public endpoint - EXPANDED list
+        if (isPublicEndpoint(requestPath, method)) {
+            logger.debug("✅ Public endpoint detected: {} {}", method, requestPath);
+            chain.doFilter(request, response);
+            return;
+        }
+
+        // 🔥 Try to get JWT token from Authorization header first
         final String requestTokenHeader = request.getHeader("Authorization");
         
         if (requestTokenHeader != null && requestTokenHeader.startsWith("Bearer ")) {
             jwtToken = requestTokenHeader.substring(7);
-            logger.debug("JWT token found in Authorization header");
+            logger.debug("✅ JWT token found in Authorization header");
         } 
-        // 🔥 NEW: Fallback to query parameter (for WebSocket connections)
+        // 🔥 Fallback to query parameter (for WebSocket connections)
         else if (request.getQueryString() != null && request.getQueryString().contains("token=")) {
             try {
                 String queryString = request.getQueryString();
@@ -63,29 +71,31 @@ public class JwtRequestFilter extends OncePerRequestFilter {
                 for (String param : params) {
                     if (param.startsWith("token=")) {
                         jwtToken = param.substring(6); // Remove "token="
-                        logger.debug("JWT token found in query parameter");
+                        logger.debug("✅ JWT token found in query parameter");
                         break;
                     }
                 }
             } catch (Exception e) {
-                logger.warn("Error extracting token from query parameter: {}", e.getMessage());
+                logger.warn("⚠️ Error extracting token from query parameter: {}", e.getMessage());
             }
         } else {
-            logger.debug("No JWT token found in Authorization header or query parameters");
+            logger.warn("❌ No JWT token found in Authorization header or query parameters for: {}", requestPath);
+            // Don't return here - let Spring Security handle it with 401
         }
 
         // Extract username from token
         if (jwtToken != null) {
             try {
                 username = jwtTokenUtil.getUsernameFromToken(jwtToken);
+                logger.debug("✅ Username extracted from token: {}", username);
             } catch (IllegalArgumentException e) {
-                logger.warn("Unable to get JWT Token: {}", e.getMessage());
+                logger.warn("❌ Unable to get JWT Token: {}", e.getMessage());
             } catch (ExpiredJwtException e) {
-                logger.warn("JWT Token has expired: {}", e.getMessage());
+                logger.warn("❌ JWT Token has expired: {}", e.getMessage());
             } catch (MalformedJwtException e) {
-                logger.warn("JWT Token is malformed: {}", e.getMessage());
+                logger.warn("❌ JWT Token is malformed: {}", e.getMessage());
             } catch (Exception e) {
-                logger.error("Error processing JWT token: {}", e.getMessage());
+                logger.error("❌ Error processing JWT token: {}", e.getMessage());
             }
         }
 
@@ -100,25 +110,63 @@ public class JwtRequestFilter extends OncePerRequestFilter {
                                                                userDetails.getAuthorities());
                     authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(authToken);
-                    logger.debug("Security context set for user: {}", username);
+                    logger.info("✅ Security context set for user: {}", username);
                 } else {
-                    logger.warn("JWT token validation failed for user: {}", username);
+                    logger.warn("❌ JWT token validation failed for user: {}", username);
                 }
             } catch (Exception e) {
-                logger.error("Error loading user details for: {}", username, e);
+                logger.error("❌ Error loading user details for: {}", username, e);
             }
         }
         
         chain.doFilter(request, response);
     }
 
-    private boolean isPublicEndpoint(String requestPath) {
-    return requestPath.startsWith("/api/auth/") ||
-           requestPath.equals("/api/support/status") ||
-           requestPath.equals("/api/support/faq") ||
-           requestPath.startsWith("/error") ||
-           requestPath.startsWith("/actuator/") ||
-           requestPath.equals("/");
-           // REMOVED: requestPath.startsWith("/ws");  <- Delete this line
-}
+    /**
+     * ✅ FIXED: Comprehensive list of public endpoints
+     * These endpoints do NOT require JWT authentication
+     */
+    private boolean isPublicEndpoint(String requestPath, String method) {
+        
+        // ✅ Auth endpoints - registration, login, token refresh
+        if (requestPath.startsWith("/api/auth/") || requestPath.startsWith("/auth/")) {
+            logger.debug("✅ Public auth endpoint: {}", requestPath);
+            return true;
+        }
+        
+        // ✅ Support endpoints
+        if (requestPath.startsWith("/api/support/")) {
+            logger.debug("✅ Public support endpoint: {}", requestPath);
+            return true;
+        }
+        
+        // ✅ Health check endpoints
+        if (requestPath.startsWith("/api/health") || 
+            requestPath.startsWith("/actuator/health") ||
+            requestPath.startsWith("/actuator/info")) {
+            logger.debug("✅ Public health endpoint: {}", requestPath);
+            return true;
+        }
+        
+        // ✅ WebSocket upgrade endpoint
+        if (requestPath.startsWith("/ws")) {
+            logger.debug("✅ WebSocket endpoint: {}", requestPath);
+            return true;
+        }
+        
+        // ✅ Error and root paths
+        if (requestPath.startsWith("/error") || requestPath.equals("/")) {
+            logger.debug("✅ Public error/root endpoint: {}", requestPath);
+            return true;
+        }
+        
+        // ✅ Actuator endpoints (for monitoring/info)
+        if (requestPath.startsWith("/actuator/")) {
+            logger.debug("✅ Public actuator endpoint: {}", requestPath);
+            return true;
+        }
+        
+        logger.debug("🔒 Protected endpoint requires JWT: {}", requestPath);
+        return false;
+    }
 }

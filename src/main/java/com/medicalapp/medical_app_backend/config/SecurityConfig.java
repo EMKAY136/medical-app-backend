@@ -3,6 +3,7 @@ package com.medicalapp.medical_app_backend.config;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -54,12 +55,11 @@ public class SecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
         
         // Parse origins from application.yml
-        String[] origins = allowedOrigins.split(",");
-        
-        System.out.println("Parsed origins: " + Arrays.asList(origins));
+        List<String> originList = Arrays.asList(allowedOrigins.split(","));
+        System.out.println("Parsed origins: " + originList);
         
         // Use setAllowedOriginPatterns to support wildcards with credentials
-        configuration.setAllowedOriginPatterns(Arrays.asList(origins));
+        configuration.setAllowedOriginPatterns(originList);
         
         // Allow all HTTP methods
         configuration.setAllowedMethods(Arrays.asList(
@@ -81,14 +81,15 @@ public class SecurityConfig {
             "Access-Control-Allow-Credentials"
         ));
         
-        // How long the response from a pre-flight request can be cached (1 hour)
+        // Cache preflight response for 1 hour
         configuration.setMaxAge(3600L);
         
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         
-        System.out.println("✅ CORS configured with allowedOriginPatterns (supports wildcards)");
+        System.out.println("✅ CORS configured with allowedOriginPatterns");
         System.out.println("✅ Credentials allowed: true");
+        System.out.println("✅ OPTIONS preflight caching: 3600s");
         System.out.println("==========================================\n");
         
         return source;
@@ -99,7 +100,7 @@ public class SecurityConfig {
         System.out.println("\n========== CONFIGURING SECURITY FILTER CHAIN ==========");
         
         http
-            // Enable CORS with custom configuration
+            // ✅ Enable CORS FIRST - must be before auth
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             
             // Disable CSRF for stateless REST API
@@ -107,9 +108,20 @@ public class SecurityConfig {
             
             // Configure authorization rules
             .authorizeHttpRequests(auth -> auth
-                // ✅ CRITICAL: Public auth endpoints - MUST be first
-                           // Matches /auth/login, /auth/register
-                .requestMatchers("/api/auth/**").permitAll()       // Matches /api/auth/login, etc.
+                
+                // ✅ OPTIONS preflight requests - MUST come FIRST
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                
+                // ✅ Auth endpoints (both /auth and /api/auth patterns)
+                .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/auth/register").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/auth/**").permitAll()
+                
+                .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
+                .requestMatchers(HttpMethod.POST, "/auth/register").permitAll()
+                .requestMatchers(HttpMethod.POST, "/auth/refresh").permitAll()
+                .requestMatchers(HttpMethod.GET, "/auth/**").permitAll()
                 
                 // ✅ Public support endpoints
                 .requestMatchers("/api/support/**").permitAll()
@@ -150,16 +162,11 @@ public class SecurityConfig {
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             );
 
-        // Add JWT filter before UsernamePasswordAuthenticationFilter
+        // Add JWT filter BEFORE authentication
         http.addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
         
-        System.out.println("✅ Security filter chain configured");
-        System.out.println("✅ Public endpoints:");
-        System.out.println("   - /auth/** (including /auth/login)");
-        System.out.println("   - /api/auth/** (including /api/auth/login)");
-        System.out.println("   - /api/support/**");
-        System.out.println("   - /ws/**");
-        System.out.println("✅ CORS enabled from corsConfigurationSource()");
+        System.out.println("✅ Security filter chain configured successfully");
+        System.out.println("✅ CORS enabled");
         System.out.println("✅ JWT filter registered");
         System.out.println("=======================================================\n");
         
