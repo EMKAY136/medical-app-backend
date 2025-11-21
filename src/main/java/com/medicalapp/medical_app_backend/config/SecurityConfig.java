@@ -54,9 +54,25 @@ public class SecurityConfig {
         
         CorsConfiguration configuration = new CorsConfiguration();
         
-        // Parse origins from application.yml
-        List<String> originList = Arrays.asList(allowedOrigins.split(","));
-        System.out.println("Parsed origins: " + originList);
+        // Parse origins from application.yml and trim whitespace
+        List<String> originList = Arrays.stream(allowedOrigins.split(","))
+                .map(String::trim)
+                .filter(origin -> !origin.isEmpty() && !origin.equals("*"))
+                .toList();
+        
+        System.out.println("Parsed origins (after filtering): " + originList);
+        
+        // CRITICAL FIX: Check if any origin contains wildcard
+        for (String origin : originList) {
+            if (origin.equals("*")) {
+                System.err.println("❌ ERROR: Wildcard '*' found in origins!");
+                System.err.println("❌ This is not allowed with allowCredentials=true");
+                throw new IllegalArgumentException(
+                    "Cannot use '*' wildcard in CORS origins when allowCredentials is true. " +
+                    "Please specify explicit origins in CORS_ORIGINS environment variable."
+                );
+            }
+        }
         
         // Use setAllowedOriginPatterns to support wildcards with credentials
         configuration.setAllowedOriginPatterns(originList);
@@ -66,8 +82,16 @@ public class SecurityConfig {
             "GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"
         ));
         
-        // Allow all headers
-        configuration.setAllowedHeaders(Arrays.asList("*"));
+        // Allow specific headers (NOT "*" with allowCredentials)
+        configuration.setAllowedHeaders(Arrays.asList(
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            "Origin",
+            "X-Requested-With",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers"
+        ));
         
         // Allow credentials (cookies, authorization headers)
         configuration.setAllowCredentials(true);
@@ -89,6 +113,7 @@ public class SecurityConfig {
         
         System.out.println("✅ CORS configured with allowedOriginPatterns");
         System.out.println("✅ Credentials allowed: true");
+        System.out.println("✅ Allowed origins: " + originList);
         System.out.println("✅ OPTIONS preflight caching: 3600s");
         System.out.println("==========================================\n");
         
