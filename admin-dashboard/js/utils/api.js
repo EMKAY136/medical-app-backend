@@ -2,14 +2,17 @@
 // Note: CONFIG is loaded from constants.js which must be loaded before this file
 
 const ApiService = {
-    // Authentication
-    login: async (credentials) => {
+    // Authentication - FIXED to accept email and password separately
+    login: async (email, password) => {
         console.log('Making POST request to:', `${CONFIG.API_BASE_URL}/auth/login`);
+        console.log('Login credentials:', { email, passwordLength: password?.length });
+        
         const response = await fetch(`${CONFIG.API_BASE_URL}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(credentials)
+            body: JSON.stringify({ email, password }) // Pack into object
         });
+        
         console.log('Response status:', response.status);
         
         if (!response.ok) {
