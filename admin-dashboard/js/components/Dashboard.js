@@ -41,8 +41,6 @@ const MedicalAdminDashboard = () => {
         activeAutoRules: 0
     });
 
-    const API_URL = `${CONFIG.ADMIN_API_URL}`;
-
     useEffect(() => {
         console.log('Dashboard mounting...');
         const token = localStorage.getItem('authToken');
@@ -62,71 +60,7 @@ const MedicalAdminDashboard = () => {
         setNotification({ message, type });
         setTimeout(() => setNotification(null), 4000);
     };
-
-    // Add this to your Admin Dashboard JavaScript file
-
-const MedicalAdminDashboard = () => {
-    const [isAuthenticated, setIsAuthenticated] = useState(false);
-    const [currentView, setCurrentView] = useState('dashboard');
-    const [patients, setPatients] = useState([]);
-    const [appointments, setAppointments] = useState([]);
-    const [testResults, setTestResults] = useState([]);
-    const [notifications, setNotifications] = useState([]);
-    const [autoNotifications, setAutoNotifications] = useState([]);
-    const [loading, setLoading] = useState(false);
-    const [showModal, setShowModal] = useState(null);
-    const [selectedPatient, setSelectedPatient] = useState(null);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [notification, setNotification] = useState(null);
-    const [showNotificationForm, setShowNotificationForm] = useState(false);
-    const [showAutoNotificationForm, setShowAutoNotificationForm] = useState(false);
-    const [notificationTab, setNotificationTab] = useState('sent');
-    
-    const [formData, setFormData] = useState({
-        recipientId: '',
-        title: '',
-        message: '',
-        type: 'appointment',
-        sendToAll: false,
-    });
-
-    const [autoFormData, setAutoFormData] = useState({
-        trigger: 'appointment_scheduled',
-        title: '',
-        message: '',
-        type: 'appointment',
-        enabled: true,
-        delayMinutes: 0,
-    });
-
-    const [stats, setStats] = useState({
-        totalPatients: 0,
-        todayAppointments: 0,
-        pendingTests: 0,
-        completedReports: 0,
-        totalNotifications: 0,
-        activeAutoRules: 0
-    });
-
-    useEffect(() => {
-        console.log('Dashboard mounting...');
-        const token = localStorage.getItem('authToken');
-        if (token) {
-            setIsAuthenticated(true);
-            loadDashboardData();
-        }
-    }, []);
-
-    useEffect(() => {
-        if (patients.length > 0 || appointments.length > 0 || testResults.length > 0 || notifications.length > 0) {
-            loadStats();
-        }
-    }, [patients, appointments, testResults, notifications, autoNotifications]);
-
-    const showNotificationAlert = (message, type = 'success') => {
-        setNotification({ message, type });
-        setTimeout(() => setNotification(null), 4000);
-    };
+;
 
     // Add this to your Admin Dashboard JavaScript file
 
@@ -586,7 +520,7 @@ const loadPatients = async () => {
     const loadNotifications = async () => {
         try {
             const token = localStorage.getItem('authToken');
-            const response = await fetch(`${API_URL}/notifications`, {
+            const response = await fetch(`${CONFIG.ADMIN_API_URL}/notifications`, {
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',
@@ -814,7 +748,7 @@ const loadPatients = async () => {
                 formData.append('file', file);
                 
                 const token = localStorage.getItem('authToken');
-                const fetchResponse = await fetch(`${API_URL}/api/results/admin/upload-with-file`, {
+                const fetchResponse = await fetch(`${CONFIG.API_BASE_URL}/results/admin/upload-with-file`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`
@@ -1411,8 +1345,8 @@ const loadPatients = async () => {
         try {
             const token = localStorage.getItem('authToken');
             const endpoint = formData.sendToAll 
-                ? `${API_URL}/notifications/send-all`
-                : `${API_URL}/notifications/send`;
+                 ? `${CONFIG.ADMIN_API_URL}/notifications/send-all`
+                 : `${CONFIG.ADMIN_API_URL}/notifications/send`;
 
             const payload = formData.sendToAll
                 ? { title: formData.title, message: formData.message, type: formData.type }
@@ -1482,7 +1416,7 @@ const loadPatients = async () => {
         if (window.confirm('Are you sure?')) {
             try {
                 const token = localStorage.getItem('authToken');
-                const response = await fetch(`${CONFIG.ADMIN_API_URL}/auto-notifications/${autoNotifId}`, {
+                const response = await fetch(`${CONFIG.ADMIN_API_URL}/notifications/${notificationId}`, {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${token}` },
                 });
@@ -1518,7 +1452,7 @@ const loadPatients = async () => {
         if (window.confirm('Are you sure?')) {
             try {
                 const token = localStorage.getItem('authToken');
-                const response = await fetch(`${API_URL}/auto-notifications/${autoNotifId}`, {
+                const response = await fetch(`${CONFIG.ADMIN_API_URL}/auto-notifications/${autoNotifId}`, {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${token}` },
                 });
@@ -1973,4 +1907,3 @@ const loadPatients = async () => {
             })}
         </div>
     );
-};
