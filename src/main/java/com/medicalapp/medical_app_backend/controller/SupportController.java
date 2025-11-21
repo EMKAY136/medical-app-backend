@@ -17,7 +17,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/support")
+@RequestMapping("/api/support")
 @CrossOrigin(origins = "*")
 public class SupportController {
 

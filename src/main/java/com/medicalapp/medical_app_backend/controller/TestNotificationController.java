@@ -20,7 +20,7 @@ import java.util.Map;
  * If your React Native app receives it, the backend is working!
  */
 @RestController
-@RequestMapping("/test")
+@RequestMapping("/api/test")
 public class TestNotificationController {
 
     @Autowired

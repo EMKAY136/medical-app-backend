@@ -29,7 +29,7 @@ import java.util.Optional;
 
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
-@RequestMapping("/results")
+@RequestMapping("/api/results")
 public class ResultController {
 
     private static final Logger logger = LoggerFactory.getLogger(ResultController.class);

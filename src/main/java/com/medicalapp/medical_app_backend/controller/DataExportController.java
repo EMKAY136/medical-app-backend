@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/export") // Fixed: Match frontend expectation
+@RequestMapping("/api/export") // Fixed: Match frontend expectation
 @CrossOrigin(origins = "*")
 public class DataExportController {
 

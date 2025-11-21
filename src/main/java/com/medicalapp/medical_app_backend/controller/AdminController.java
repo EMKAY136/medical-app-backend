@@ -33,7 +33,7 @@ import java.util.HashMap;
 import java.util.List;
 
 @RestController
-@RequestMapping("/admin")
+@RequestMapping("/api/admin")
 @CrossOrigin(origins = "*", maxAge = 3600)
 public class AdminController {
 
