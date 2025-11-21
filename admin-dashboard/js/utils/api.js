@@ -6,7 +6,7 @@ const ApiService = {
     
     // ✅ Authentication - Fixed with CORS debugging
     login: async (email, password) => {
-        const loginUrl = `${CONFIG.API_BASE_URL}/auth/login`;
+        const loginUrl = `${CONFIG.API_BASE_URL}/api/auth/login`;
         
         console.log('========== LOGIN REQUEST ==========');
         console.log('📍 URL:', loginUrl);
