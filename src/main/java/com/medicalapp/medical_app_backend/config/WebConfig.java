@@ -6,6 +6,7 @@ import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.stream.Collectors;
 
 @Configuration
@@ -16,29 +17,34 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
-        String[] origins = Arrays.stream(allowedOrigins.split(","))
-                .map(String::trim)
-                .filter(origin -> !origin.isEmpty() && !origin.equals("*"))
-                .toArray(String[]::new);
-        
         System.out.println("\n========== WEB MVC CORS CONFIGURATION ==========");
-        System.out.println("Configuring CORS for origins: " + allowedOrigins);
-        System.out.println("Parsed origins: " + Arrays.toString(origins));
+        System.out.println("Raw allowed origins: " + allowedOrigins);
         
-        // CRITICAL FIX: Check if any origin contains wildcard
-        for (String origin : origins) {
+        // Parse and clean origins - remove wildcards
+        List<String> originList = Arrays.stream(allowedOrigins.split(","))
+                .map(String::trim)
+                .filter(origin -> !origin.isEmpty())
+                .filter(origin -> !origin.equals("*"))  // Remove exact "*"
+                .collect(Collectors.toList());
+        
+        System.out.println("Parsed origins (after filtering): " + originList);
+        
+        // Validate no wildcard-only origins remain
+        for (String origin : originList) {
             if (origin.equals("*")) {
-                System.err.println("❌ ERROR: Wildcard '*' found in origins!");
+                System.err.println("❌ ERROR: Wildcard '*' found!");
                 throw new IllegalArgumentException(
-                    "Cannot use '*' wildcard in CORS origins when allowCredentials is true"
+                    "Cannot use '*' wildcard in CORS origins when allowCredentials is true. " +
+                    "Use specific patterns like 'https://*.vercel.app' instead."
                 );
             }
         }
         
-        // FIXED: Use allowedOriginPatterns instead of allowedOrigins
-        // This allows patterns while working with credentials
+        String[] origins = originList.toArray(new String[0]);
+        
+        // ✅ CRITICAL: Use allowedOriginPatterns (supports patterns like *.vercel.app)
         registry.addMapping("/**")
-                .allowedOriginPatterns(origins)
+                .allowedOriginPatterns(origins)  // ✅ Supports wildcard patterns
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD")
                 .allowedHeaders(
                     "Authorization",
@@ -55,7 +61,8 @@ public class WebConfig implements WebMvcConfigurer {
                 
         System.out.println("✅ WebMvc CORS configured with allowedOriginPatterns");
         System.out.println("✅ Credentials allowed: true");
-        System.out.println("✅ Allowed origins: " + Arrays.toString(origins));
+        System.out.println("✅ Patterns supported: https://*.vercel.app");
+        System.out.println("✅ Configured origins: " + Arrays.toString(origins));
         System.out.println("================================================\n");
     }
 }
