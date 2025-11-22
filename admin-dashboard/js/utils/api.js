@@ -305,7 +305,7 @@ const ApiService = {
         console.log('📥 Fetching test results...');
         try {
             // Try primary endpoint first
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/results?page=${page}&size=${size}`, {
+            const response = await fetch(`${CONFIG.ADMIN_API_URL}/results?page=${page}&size=${size}`, {
                 method: 'GET',
                 headers: ApiService.getAuthHeaders()
             });
@@ -363,7 +363,7 @@ const ApiService = {
             testDate: resultData.testDate || new Date().toISOString().split('T')[0]
         };
         
-        const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/results/admin/upload`, {
+        const response = await fetch(`${CONFIG.ADMIN_API_URL}/results/admin/upload`, {
             method: 'POST',
             headers: ApiService.getAuthHeaders(),
             body: JSON.stringify(backendData)
