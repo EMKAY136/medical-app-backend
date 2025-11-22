@@ -3,6 +3,7 @@ package com.medicalapp.medical_app_backend.service;
 import com.medicalapp.medical_app_backend.dto.ResultDto;
 import com.medicalapp.medical_app_backend.entity.Appointment;
 import com.medicalapp.medical_app_backend.entity.MedicalResult;
+import com.medicalapp.medical_app_backend.entity.Result;
 import com.medicalapp.medical_app_backend.entity.User;
 import com.medicalapp.medical_app_backend.repository.AppointmentRepository;
 import com.medicalapp.medical_app_backend.repository.MedicalResultRepository;
@@ -37,7 +38,6 @@ public class ResultService {
 
     @Autowired
     private MedicalResultRepository medicalResultRepository;
-
     @Autowired
     private UserRepository userRepository;
 
@@ -48,7 +48,7 @@ public class ResultService {
     private SimpMessagingTemplate messagingTemplate;
 
     @Autowired
-private NotificationService notificationService;
+    private NotificationService notificationService;
 
     @Value("${app.file.upload-dir:uploads/results}")
     private String uploadDir;
@@ -522,35 +522,58 @@ notificationService.createAndSendResultNotification(patientId, savedResult.getId
         return response;
     }
 
-    public List<ResultDto> getUserResults(UserDetails userDetails) {
-        try {
-            User patient = getCurrentUser(userDetails);
-            List<MedicalResult> results = medicalResultRepository.findDownloadableResultsByPatient(patient);
+    // REPLACE the getUserResults() method in ResultService.java with this:
 
-            return results.stream()
-                    .map(this::convertToDto)
-                    .collect(Collectors.toList());
-
-        } catch (Exception e) {
-            logger.error("Error fetching user results", e);
+public List<ResultDto> getUserResults(UserDetails userDetails) {
+    try {
+        logger.info("========================================");
+        logger.info("📋 getUserResults() - START");
+        logger.info("👤 User: {}", userDetails != null ? userDetails.getUsername() : "NULL");
+        
+        // CRITICAL: Check if userDetails is null
+        if (userDetails == null) {
+            logger.error("❌ UserDetails is NULL - authentication failed!");
             return Collections.emptyList();
         }
-    }
+        
+        // Get the patient User entity
+        User patient = getCurrentUser(userDetails);
+        logger.info("✅ Found patient: {} (ID: {})", patient.getUsername(), patient.getId());
+        
+        // Use the existing repository method
+        logger.info("🔍 Querying repository with findByPatient...");
+        List<MedicalResult> results = medicalResultRepository.findByPatient(patient);
+        
+        logger.info("✅ Repository returned {} results", results.size());
+        
+        // Filter for visible and downloadable results
+        List<MedicalResult> filteredResults = results.stream()
+                .filter(r -> r.isVisible() && r.isDownloadable())
+                .collect(Collectors.toList());
+        
+        logger.info("✅ After filtering: {} visible/downloadable results", filteredResults.size());
+        
+        // Convert to DTOs
+        List<ResultDto> dtoList = filteredResults.stream()
+                .map(this::convertToDto)
+                .collect(Collectors.toList());
+        
+        logger.info("✅ Converted to DTOs: {} items", dtoList.size());
+        logger.info("✅ getUserResults() - SUCCESS");
+        logger.info("========================================");
+        
+        return dtoList;
 
-    public List<ResultDto> getRecentResults(UserDetails userDetails) {
-        try {
-            User patient = getCurrentUser(userDetails);
-            List<MedicalResult> results = medicalResultRepository
-                    .findTop5ByPatientOrderByTestDateDesc(patient);
-
-            return results.stream()
-                    .map(this::convertToDto)
-                    .collect(Collectors.toList());
-        } catch (Exception e) {
-            logger.error("Error fetching recent results", e);
-            return Collections.emptyList();
-        }
+    } catch (Exception e) {
+        logger.error("❌❌❌ ERROR IN getUserResults() ❌❌❌");
+        logger.error("Exception type: {}", e.getClass().getName());
+        logger.error("Message: {}", e.getMessage());
+        logger.error("Stack trace:", e);
+        logger.error("========================================");
+        return Collections.emptyList();
     }
+}
+
 
     public List<ResultDto> searchResultsByTestName(String testName, UserDetails userDetails) {
         try {

@@ -1,6 +1,7 @@
 package com.medicalapp.medical_app_backend.repository;
 
 import com.medicalapp.medical_app_backend.entity.Result;
+import com.medicalapp.medical_app_backend.entity.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -14,7 +15,22 @@ import java.util.List;
 @Repository
 public interface ResultRepository extends JpaRepository<Result, Long> {
     
-    // Methods needed by AdminService
+    // ========== NEW METHODS NEEDED BY ResultService ==========
+    
+    // Find by user (instead of patient)
+    List<Result> findByUser(User user);
+    
+    // Find recent results (top 5)
+    List<Result> findTop5ByUserOrderByTestDateDesc(User user);
+    
+    // Search by test type
+    List<Result> findByUserAndTestTypeContainingIgnoreCase(User user, String testType);
+    
+    // Count for date range
+    long countByUserAndCreatedAtBetween(User user, LocalDateTime start, LocalDateTime end);
+    
+    // ========== EXISTING METHODS ==========
+    
     List<Result> findByUserIdOrderByCreatedAtDesc(Long userId);
     
     long countByCreatedAtAfter(LocalDateTime date);
@@ -38,7 +54,6 @@ public interface ResultRepository extends JpaRepository<Result, Long> {
     List<Result> findByTestTypeContainingIgnoreCaseOrResultContainingIgnoreCaseOrNotesContainingIgnoreCase(
         @Param("query") String testType, @Param("query") String result, @Param("query") String notes);
     
-    // Additional useful methods
     List<Result> findByUserIdAndStatusOrderByCreatedAtDesc(Long userId, String status);
     
     List<Result> findByUserIdAndTestTypeOrderByCreatedAtDesc(Long userId, String testType);
@@ -46,17 +61,14 @@ public interface ResultRepository extends JpaRepository<Result, Long> {
     @Query("SELECT r FROM Result r WHERE r.user.id = :userId AND r.testDate >= :date ORDER BY r.createdAt DESC")
     List<Result> findRecentResultsByUserId(@Param("userId") Long userId, @Param("date") java.time.LocalDate date);
     
-    // Statistics methods
     @Query("SELECT r.testType, COUNT(r) FROM Result r WHERE r.user.id = :userId GROUP BY r.testType")
     List<Object[]> getTestTypeStatsByUserId(@Param("userId") Long userId);
     
     @Query("SELECT r.status, COUNT(r) FROM Result r WHERE r.user.id = :userId GROUP BY r.status")
     List<Object[]> getStatusStatsByUserId(@Param("userId") Long userId);
     
-    // Find abnormal results for alerts
     List<Result> findByUserIdAndStatusInOrderByCreatedAtDesc(Long userId, List<String> statuses);
     
-    // Count by doctor (for admin analytics)
     long countByDoctorName(String doctorName);
     
     @Query("SELECT r.doctorName, COUNT(r) FROM Result r GROUP BY r.doctorName")
