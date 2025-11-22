@@ -305,7 +305,7 @@ const ApiService = {
         console.log('📥 Fetching test results...');
         try {
             // Try primary endpoint first
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/results?page=${page}&size=${size}`, {
+            const response = await fetch(`${CONFIG.ADMIN_API_URL}api/admin/results?page=${page}&size=${size}`, {
                 method: 'GET',
                 headers: ApiService.getAuthHeaders()
             });
