@@ -478,7 +478,7 @@ const loadPatients = async () => {
                 formData.append('file', file);
                 
                 const token = localStorage.getItem('authToken');
-                const fetchResponse = await fetch(`${CONFIG.API_BASE_URL}/api/results/admin/upload-with-file`, {
+                const fetchResponse = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/results/admin/upload-with-file`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`

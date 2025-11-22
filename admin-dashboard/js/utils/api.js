@@ -353,7 +353,7 @@ const ApiService = {
             testDate: resultData.testDate || new Date().toISOString().split('T')[0]
         };
         
-        const response = await fetch(`${CONFIG.API_BASE_URL}/results/admin/upload`, {
+        const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/results/admin/upload`, {
             method: 'POST',
             headers: ApiService.getAuthHeaders(),
             body: JSON.stringify(backendData)
