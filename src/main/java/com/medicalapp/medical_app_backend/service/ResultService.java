@@ -347,6 +347,28 @@ notificationService.createAndSendResultNotification(patientId, savedResult.getId
         return response;
     }
 
+    public List<ResultDto> getRecentResults(UserDetails userDetails) {
+    try {
+        User patient = getCurrentUser(userDetails);
+        
+        // Get results from last 30 days
+        LocalDateTime thirtyDaysAgo = LocalDateTime.now().minusDays(30);
+        List<MedicalResult> results = medicalResultRepository.findByPatient(patient);
+        
+        return results.stream()
+                .filter(r -> r.isVisible() && r.isDownloadable())
+                .filter(r -> r.getTestDate().isAfter(thirtyDaysAgo))
+                .sorted((a, b) -> b.getTestDate().compareTo(a.getTestDate())) // newest first
+                .limit(10) // only 10 most recent
+                .map(this::convertToDto)
+                .collect(Collectors.toList());
+
+    } catch (Exception e) {
+        logger.error("Error fetching recent results", e);
+        return Collections.emptyList();
+    }
+}
+
     public Map<String, Object> getAllResultsByAdmin(UserDetails adminDetails) {
         Map<String, Object> response = new HashMap<>();
         
