@@ -34,7 +34,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/admin")
-@CrossOrigin(origins = "*", maxAge = 3600)
 public class AdminController {
 
     private static final Logger logger = LoggerFactory.getLogger(AdminController.class);
