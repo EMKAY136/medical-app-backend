@@ -304,7 +304,7 @@ const ApiService = {
     getTestResults: async (page = 0, size = 50) => {
         console.log('📥 Fetching test results...');
         try {
-            const response = await fetch(`${CONFIG.API_BASE_URL}/results/admin/all?page=${page}&size=${size}`, {
+            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/results/admin/all?page=${page}&size=${size}`, {
                 method: 'GET',
                 headers: ApiService.getAuthHeaders()
             });
