@@ -272,7 +272,7 @@ const ApiService = {
     getAppointments: async (page = 0, size = 50, patientId = null) => {
         console.log('📥 Fetching appointments...');
         try {
-            let url = `${CONFIG.ADMIN_API_URL}/appointments?page=${page}&size=${size}`;
+            let url = `${CONFIG.ADMIN_API_URL}/api/appointments?page=${page}&size=${size}`;
             if (patientId) {
                 url += `&patientId=${patientId}`;
             }

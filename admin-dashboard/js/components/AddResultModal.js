@@ -29,59 +29,106 @@ const AddResultModal = ({ patients, onClose, onSubmit }) => {
         return fullName.includes(search) || email.includes(search);
     });
 
-    useEffect(() => {
-        const loadPatientAppointments = async () => {
-            if (formData.patientId) {
-                try {
-                    const data = await ApiService.getAppointments(0, 50, formData.patientId);
-                    const relevantAppointments = (data.appointments || []).filter(apt => 
-                        apt.status && (
-                            apt.status.toLowerCase() === 'scheduled' || 
-                            apt.status.toLowerCase() === 'completed' ||
-                            apt.status.toLowerCase() === 'pending'
-                        )
-                    );
-                    
-                    // Sort appointments: SCHEDULED first, then others
-                    const sortedAppointments = relevantAppointments.sort((a, b) => {
-                        const aStatus = a.status.toLowerCase();
-                        const bStatus = b.status.toLowerCase();
-                        
-                        // Scheduled comes first
-                        if (aStatus === 'scheduled' && bStatus !== 'scheduled') return -1;
-                        if (bStatus === 'scheduled' && aStatus !== 'scheduled') return 1;
-                        
-                        // Within same status group, sort by date (most recent first)
-                        const aDate = new Date(a.scheduledDate || a.appointmentDate);
-                        const bDate = new Date(b.scheduledDate || b.appointmentDate);
-                        return bDate - aDate;
-                    });
-                    
-                    setPatientAppointments(sortedAppointments);
-                    
-                    if (sortedAppointments.length > 0) {
-                        const mostRecent = sortedAppointments[0];
-                        const appointmentDate = mostRecent.scheduledDate || mostRecent.appointmentDate;
-                        setFormData(prev => ({
-                            ...prev,
-                            appointmentId: mostRecent.id.toString(),
-                            testType: mostRecent.reason || mostRecent.testType || mostRecent.appointmentType || '',
-                            testDate: appointmentDate ? 
-                                new Date(appointmentDate).toISOString().split('T')[0] : 
-                                new Date().toISOString().split('T')[0]
-                        }));
-                    }
-                } catch (error) {
-                    console.error('Error loading patient appointments:', error);
-                }
-            } else {
-                setPatientAppointments([]);
-            }
-        };
-        
-        loadPatientAppointments();
-    }, [formData.patientId]);
+useEffect(() => {
+    const loadPatientAppointments = async () => {
+        if (!formData.patientId) {
+            console.log('No patient selected, clearing appointments');
+            setPatientAppointments([]);
+            return;
+        }
 
+        console.log('=== LOADING APPOINTMENTS ===');
+        console.log('Patient ID:', formData.patientId);
+        
+        try {
+            console.log('Fetching appointments from API...');
+            const data = await ApiService.getAppointments(0, 50, formData.patientId);
+            
+            console.log('API Response:', data);
+            console.log('Total appointments:', data.appointments?.length || 0);
+            
+            if (!data.appointments || data.appointments.length === 0) {
+                console.warn('No appointments found for patient');
+                setPatientAppointments([]);
+                return;
+            }
+
+            // Log all appointments before filtering
+            console.log('All appointments:', data.appointments.map(apt => ({
+                id: apt.id,
+                status: apt.status,
+                reason: apt.reason,
+                date: apt.appointmentDate || apt.scheduledDate
+            })));
+
+            const relevantAppointments = data.appointments.filter(apt => {
+                const status = apt.status?.toLowerCase() || '';
+                const isRelevant = ['scheduled', 'completed', 'pending', 'confirmed'].includes(status);
+                console.log(`Appointment ${apt.id}: status="${status}", relevant=${isRelevant}`);
+                return isRelevant;
+            });
+            
+            console.log('Relevant appointments:', relevantAppointments.length);
+            
+            // Sort appointments: SCHEDULED/CONFIRMED first, then others
+            const sortedAppointments = relevantAppointments.sort((a, b) => {
+                const aStatus = (a.status || '').toLowerCase();
+                const bStatus = (b.status || '').toLowerCase();
+                
+                // Scheduled/Confirmed comes first
+                const aPriority = ['scheduled', 'confirmed'].includes(aStatus) ? 0 : 1;
+                const bPriority = ['scheduled', 'confirmed'].includes(bStatus) ? 0 : 1;
+                
+                if (aPriority !== bPriority) return aPriority - bPriority;
+                
+                // Within same priority, sort by date (most recent first)
+                const aDate = new Date(a.scheduledDate || a.appointmentDate || 0);
+                const bDate = new Date(b.scheduledDate || b.appointmentDate || 0);
+                return bDate - aDate;
+            });
+            
+            console.log('Sorted appointments:', sortedAppointments.map(apt => ({
+                id: apt.id,
+                status: apt.status,
+                reason: apt.reason
+            })));
+            
+            setPatientAppointments(sortedAppointments);
+            
+            // Auto-select the first appointment
+            if (sortedAppointments.length > 0) {
+                const mostRecent = sortedAppointments[0];
+                const appointmentDate = mostRecent.scheduledDate || mostRecent.appointmentDate;
+                
+                console.log('Auto-selecting appointment:', {
+                    id: mostRecent.id,
+                    reason: mostRecent.reason,
+                    date: appointmentDate
+                });
+                
+                setFormData(prev => ({
+                    ...prev,
+                    appointmentId: mostRecent.id.toString(),
+                    testType: mostRecent.reason || mostRecent.testType || mostRecent.appointmentType || '',
+                    testDate: appointmentDate ? 
+                        new Date(appointmentDate).toISOString().split('T')[0] : 
+                        new Date().toISOString().split('T')[0]
+                }));
+            }
+        } catch (error) {
+            console.error('❌ Error loading patient appointments:', error);
+            console.error('Error details:', {
+                message: error.message,
+                stack: error.stack,
+                response: error.response
+            });
+            setPatientAppointments([]);
+            alert(`Failed to load appointments: ${error.message}`);
+        }
+    };
+    
+    loadPatientAppointments();
+}, [formData.patientId]);
     const handlePatientSelect = (patient) => {
         setSelectedPatient(patient);
         setPatientSearch(`${patient.firstName} ${patient.lastName}`);
