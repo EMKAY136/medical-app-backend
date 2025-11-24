@@ -16,6 +16,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -43,10 +44,17 @@ public class ResultController {
     // ========== PATIENT ENDPOINTS ==========
 
     @PostMapping
+    @Transactional
     public ResponseEntity<?> createResult(@Valid @RequestBody ResultDto resultDto,
                                          @AuthenticationPrincipal UserDetails userDetails) {
         try {
-            logger.info("Patient {} creating result", userDetails.getUsername());
+            logger.info("Patient {} creating result", userDetails != null ? userDetails.getUsername() : "NULL");
+            
+            if (userDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             Map<String, Object> response = resultService.createResult(resultDto, userDetails);
             
             Boolean success = (Boolean) response.get("success");
@@ -63,22 +71,63 @@ public class ResultController {
     }
 
     @GetMapping
+    @Transactional(readOnly = true)  // ✅ CRITICAL FIX - Added transaction
     public ResponseEntity<?> getUserResults(@AuthenticationPrincipal UserDetails userDetails) {
         try {
-            logger.info("Fetching results for user: {}", userDetails.getUsername());
+            logger.info("========================================");
+            logger.info("📥 GET /api/results - REQUEST RECEIVED");
+            logger.info("👤 UserDetails: {}", userDetails != null ? userDetails.getUsername() : "NULL");
+            
+            if (userDetails != null) {
+                logger.info("🔐 Authorities: {}", userDetails.getAuthorities());
+            }
+            
+            logger.info("========================================");
+            
+            // CRITICAL CHECK: If userDetails is null, authentication failed
+            if (userDetails == null) {
+                logger.error("❌ AUTHENTICATION FAILED - UserDetails is NULL");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required", "code", "AUTH_REQUIRED"));
+            }
+            
+            logger.info("✅ Authentication successful, fetching results for: {}", userDetails.getUsername());
             List<ResultDto> results = resultService.getUserResults(userDetails);
-            logger.info("Found {} results", results.size());
+            
+            logger.info("✅ Found {} results, returning response", results != null ? results.size() : 0);
+            logger.info("========================================");
+            
             return ResponseEntity.ok(results);
+            
         } catch (Exception e) {
-            logger.error("Error fetching results", e);
+            logger.error("========================================");
+            logger.error("❌❌❌ CRITICAL ERROR IN getUserResults() ❌❌❌");
+            logger.error("Exception Type: {}", e.getClass().getName());
+            logger.error("Message: {}", e.getMessage());
+            logger.error("Stack Trace:", e);
+            logger.error("========================================");
+            
+            // Return detailed error for debugging
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("error", "Error fetching results");
+            errorResponse.put("message", e.getMessage() != null ? e.getMessage() : "Unknown error");
+            errorResponse.put("type", e.getClass().getSimpleName());
+            errorResponse.put("timestamp", java.time.LocalDateTime.now().toString());
+            
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Error fetching results: " + e.getMessage()));
+                    .body(errorResponse);
         }
     }
 
     @GetMapping("/recent")
+    @Transactional(readOnly = true)
     public ResponseEntity<?> getRecentResults(@AuthenticationPrincipal UserDetails userDetails) {
         try {
+            if (userDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             List<ResultDto> results = resultService.getRecentResults(userDetails);
             return ResponseEntity.ok(results);
         } catch (Exception e) {
@@ -89,9 +138,15 @@ public class ResultController {
     }
 
     @GetMapping("/search")
+    @Transactional(readOnly = true)
     public ResponseEntity<?> searchResults(@RequestParam String testName,
                                          @AuthenticationPrincipal UserDetails userDetails) {
         try {
+            if (userDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             List<ResultDto> results = resultService.searchResultsByTestName(testName, userDetails);
             return ResponseEntity.ok(results);
         } catch (Exception e) {
@@ -102,9 +157,15 @@ public class ResultController {
     }
 
     @GetMapping("/{id}")
+    @Transactional(readOnly = true)
     public ResponseEntity<?> getResultById(@PathVariable Long id,
                                           @AuthenticationPrincipal UserDetails userDetails) {
         try {
+            if (userDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             Map<String, Object> response = resultService.getResultById(id, userDetails);
             
             Boolean success = (Boolean) response.get("success");
@@ -120,13 +181,16 @@ public class ResultController {
         }
     }
 
-    /**
-     * FIXED: Download result - handles both file and non-file results
-     */
     @GetMapping("/{id}/download")
+    @Transactional(readOnly = true)
     public ResponseEntity<?> downloadResult(@PathVariable Long id,
                                            @AuthenticationPrincipal UserDetails userDetails) {
         try {
+            if (userDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             logger.info("Download request for result ID: {} by user: {}", id, userDetails.getUsername());
             
             Optional<MedicalResult> resultOpt = medicalResultRepository.findById(id);
@@ -176,7 +240,6 @@ public class ResultController {
             
             if (!Files.exists(filePath)) {
                 logger.warn("File not found on disk: {}", filePath.toAbsolutePath());
-                // Return JSON with file metadata even if file missing
                 return ResponseEntity.ok(Map.of(
                     "success", true,
                     "hasFile", true,
@@ -221,9 +284,15 @@ public class ResultController {
     // ========== ADMIN ENDPOINTS ==========
 
     @PostMapping("/admin/upload")
+    @Transactional
     public ResponseEntity<?> uploadResult(@RequestBody Map<String, Object> resultData,
                                         @AuthenticationPrincipal UserDetails adminDetails) {
         try {
+            if (adminDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             logger.info("Admin uploading result (no file): {}", resultData);
             Map<String, Object> response = resultService.uploadResultForPatient(resultData, adminDetails);
             
@@ -243,6 +312,7 @@ public class ResultController {
     }
 
     @PostMapping("/admin/upload-with-file")
+    @Transactional
     public ResponseEntity<?> uploadResultWithFile(
             @RequestParam("patientId") Long patientId,
             @RequestParam("testType") String testType,
@@ -258,6 +328,11 @@ public class ResultController {
             @AuthenticationPrincipal UserDetails adminDetails) {
         
         try {
+            if (adminDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             logger.info("Admin uploading result with file for patient: {}", patientId);
             
             Map<String, Object> response = resultService.uploadResultWithFile(
@@ -282,9 +357,15 @@ public class ResultController {
     }
 
     @GetMapping("/admin/patient/{patientId}")
+    @Transactional(readOnly = true)
     public ResponseEntity<?> getPatientResults(@PathVariable Long patientId,
                                                @AuthenticationPrincipal UserDetails adminDetails) {
         try {
+            if (adminDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             Map<String, Object> response = resultService.getPatientResultsByAdmin(patientId, adminDetails);
             
             Boolean success = (Boolean) response.get("success");
@@ -301,8 +382,14 @@ public class ResultController {
     }
 
     @GetMapping("/admin/all")
+    @Transactional(readOnly = true)
     public ResponseEntity<?> getAllResults(@AuthenticationPrincipal UserDetails adminDetails) {
         try {
+            if (adminDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             Map<String, Object> response = resultService.getAllResultsByAdmin(adminDetails);
             
             Boolean success = (Boolean) response.get("success");
@@ -321,10 +408,16 @@ public class ResultController {
     // ========== GENERAL ENDPOINTS ==========
 
     @PutMapping("/{id}")
+    @Transactional
     public ResponseEntity<?> updateResult(@PathVariable Long id,
                                         @Valid @RequestBody ResultDto resultDto,
                                         @AuthenticationPrincipal UserDetails userDetails) {
         try {
+            if (userDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             Map<String, Object> response = resultService.updateResult(id, resultDto, userDetails);
             
             Boolean success = (Boolean) response.get("success");
@@ -341,9 +434,15 @@ public class ResultController {
     }
 
     @DeleteMapping("/{id}")
+    @Transactional
     public ResponseEntity<?> deleteResult(@PathVariable Long id,
                                         @AuthenticationPrincipal UserDetails userDetails) {
         try {
+            if (userDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             Map<String, Object> response = resultService.deleteResult(id, userDetails);
             
             Boolean success = (Boolean) response.get("success");
@@ -362,8 +461,14 @@ public class ResultController {
     // ========== STATISTICS ENDPOINTS ==========
 
     @GetMapping("/stats")
+    @Transactional(readOnly = true)
     public ResponseEntity<?> getUserResultStats(@AuthenticationPrincipal UserDetails userDetails) {
         try {
+            if (userDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             Map<String, Object> stats = resultService.getUserResultStats(userDetails);
             return ResponseEntity.ok(stats);
         } catch (Exception e) {
@@ -374,8 +479,14 @@ public class ResultController {
     }
 
     @GetMapping("/admin/stats")
+    @Transactional(readOnly = true)
     public ResponseEntity<?> getOverallStats(@AuthenticationPrincipal UserDetails adminDetails) {
         try {
+            if (adminDetails == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Authentication required"));
+            }
+            
             Map<String, Object> stats = resultService.getOverallResultStats(adminDetails);
             return ResponseEntity.ok(stats);
         } catch (Exception e) {
@@ -383,5 +494,29 @@ public class ResultController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "Error fetching stats: " + e.getMessage()));
         }
+    }
+    
+    // ========== DEBUG ENDPOINT ==========
+    
+    @GetMapping("/test-auth")
+    public ResponseEntity<?> testAuth(@AuthenticationPrincipal UserDetails userDetails) {
+        logger.info("🧪 TEST AUTH ENDPOINT CALLED");
+        logger.info("UserDetails is null: {}", userDetails == null);
+        
+        if (userDetails == null) {
+            return ResponseEntity.ok(Map.of(
+                "authenticated", false,
+                "message", "No authentication"
+            ));
+        }
+        
+        logger.info("Username: {}", userDetails.getUsername());
+        logger.info("Authorities: {}", userDetails.getAuthorities());
+        
+        return ResponseEntity.ok(Map.of(
+            "authenticated", true,
+            "username", userDetails.getUsername(),
+            "authorities", userDetails.getAuthorities().toString()
+        ));
     }
 }
