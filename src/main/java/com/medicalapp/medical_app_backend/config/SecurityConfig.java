@@ -28,7 +28,7 @@ public class SecurityConfig {
     private final JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
     private final JwtRequestFilter jwtRequestFilter;
     
-    @Value("${app.security.cors.allowed-origins}")
+    @Value("${app.security.cors.allowed-origins:*}")
     private String allowedOrigins;
 
     public SecurityConfig(JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint, 
@@ -50,56 +50,42 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         System.out.println("\n========== SECURITY CONFIG CORS ==========");
-        System.out.println("Allowed origins from application.yml: " + allowedOrigins);
+        System.out.println("Allowed origins from config: " + allowedOrigins);
         
         CorsConfiguration configuration = new CorsConfiguration();
         
-        // Parse origins from application.yml and trim whitespace
-        List<String> originList = Arrays.stream(allowedOrigins.split(","))
-                .map(String::trim)
-                .filter(origin -> !origin.isEmpty() && !origin.equals("*"))
-                .toList();
-        
-        System.out.println("Parsed origins (after filtering): " + originList);
-        
-        // CRITICAL FIX: Check if any origin contains wildcard
-        for (String origin : originList) {
-            if (origin.equals("*")) {
-                System.err.println("❌ ERROR: Wildcard '*' found in origins!");
-                System.err.println("❌ This is not allowed with allowCredentials=true");
-                throw new IllegalArgumentException(
-                    "Cannot use '*' wildcard in CORS origins when allowCredentials is true. " +
-                    "Please specify explicit origins in CORS_ORIGINS environment variable."
-                );
-            }
+        // ✅ CRITICAL FIX: Always use allowedOriginPatterns instead of allowedOrigins
+        if (allowedOrigins == null || allowedOrigins.trim().isEmpty() || allowedOrigins.equals("*")) {
+            // Allow all origins with patterns (supports credentials)
+            configuration.setAllowedOriginPatterns(Arrays.asList("*"));
+            System.out.println("✅ Using wildcard pattern: allowing all origins");
+        } else {
+            // Parse specific origins
+            List<String> originList = Arrays.stream(allowedOrigins.split(","))
+                    .map(String::trim)
+                    .filter(origin -> !origin.isEmpty())
+                    .toList();
+            
+            configuration.setAllowedOriginPatterns(originList);
+            System.out.println("✅ Configured specific origin patterns: " + originList);
         }
-        
-        // Use setAllowedOriginPatterns to support wildcards with credentials
-        configuration.setAllowedOriginPatterns(originList);
         
         // Allow all HTTP methods
         configuration.setAllowedMethods(Arrays.asList(
             "GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"
         ));
         
-        // Allow specific headers (NOT "*" with allowCredentials)
-        configuration.setAllowedHeaders(Arrays.asList(
-            "Authorization",
-            "Content-Type",
-            "Accept",
-            "Origin",
-            "X-Requested-With",
-            "Access-Control-Request-Method",
-            "Access-Control-Request-Headers"
-        ));
+        // Allow all headers (this is safe with specific origins)
+        configuration.setAllowedHeaders(Arrays.asList("*"));
         
-        // Allow credentials (cookies, authorization headers)
+        // Allow credentials (required for JWT tokens in Authorization header)
         configuration.setAllowCredentials(true);
         
         // Expose these headers to the client
         configuration.setExposedHeaders(Arrays.asList(
             "Authorization", 
             "Content-Type",
+            "Content-Disposition",
             "X-Total-Count",
             "Access-Control-Allow-Origin",
             "Access-Control-Allow-Credentials"
@@ -111,9 +97,9 @@ public class SecurityConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         
-        System.out.println("✅ CORS configured with allowedOriginPatterns");
+        System.out.println("✅ CORS configured with allowedOriginPatterns (supports credentials)");
         System.out.println("✅ Credentials allowed: true");
-        System.out.println("✅ Allowed origins: " + originList);
+        System.out.println("✅ All methods allowed");
         System.out.println("✅ OPTIONS preflight caching: 3600s");
         System.out.println("==========================================\n");
         
@@ -125,7 +111,7 @@ public class SecurityConfig {
         System.out.println("\n========== CONFIGURING SECURITY FILTER CHAIN ==========");
         
         http
-            // ✅ Enable CORS FIRST - must be before auth
+            // ✅ Enable CORS FIRST with our configuration
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             
             // Disable CSRF for stateless REST API
@@ -137,7 +123,7 @@ public class SecurityConfig {
                 // ✅ OPTIONS preflight requests - MUST come FIRST
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 
-                // ✅ Auth endpoints (both /auth and /api/auth patterns)
+                // ✅ Auth endpoints
                 .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/signup").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
@@ -148,25 +134,19 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/auth/refresh").permitAll()
                 .requestMatchers(HttpMethod.GET, "/auth/**").permitAll()
                 
-                // ✅ Public support endpoints
+                // ✅ Public endpoints
                 .requestMatchers("/api/support/**").permitAll()
-                
-                // ✅ Health check endpoints
                 .requestMatchers("/api/health").permitAll()
                 .requestMatchers("/actuator/health/**").permitAll()
                 .requestMatchers("/actuator/info").permitAll()
-                
-                // ✅ Error handling
                 .requestMatchers("/error").permitAll()
                 .requestMatchers("/").permitAll()
                 
-                // ✅ WebSocket endpoints - public for initial handshake
+                // ✅ WebSocket - public for initial handshake
                 .requestMatchers("/ws/**").permitAll()
                 
-                // 🔒 Protected admin endpoints
+                // 🔒 Protected endpoints
                 .requestMatchers("/api/admin/**").authenticated()
-                
-                // 🔒 Protected user endpoints
                 .requestMatchers("/api/notifications/**").authenticated()
                 .requestMatchers("/api/users/**").authenticated()
                 .requestMatchers("/api/appointments/**").authenticated()
@@ -191,7 +171,7 @@ public class SecurityConfig {
         http.addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
         
         System.out.println("✅ Security filter chain configured successfully");
-        System.out.println("✅ CORS enabled");
+        System.out.println("✅ CORS enabled with allowedOriginPatterns");
         System.out.println("✅ JWT filter registered");
         System.out.println("=======================================================\n");
         
