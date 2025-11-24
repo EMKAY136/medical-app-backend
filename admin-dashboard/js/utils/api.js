@@ -205,7 +205,7 @@ const ApiService = {
     getPatients: async (page = 0, size = 50) => {
         console.log('📥 Fetching patients...');
         try {
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/patients?page=${page}&size=${size}`, {
+            const response = await fetch(`${CONFIG.ADMIN_API_UR}/api/admin/patients?page=${page}&size=${size}`, {
                 method: 'GET',
                 headers: ApiService.getAuthHeaders()
             });
@@ -272,7 +272,7 @@ const ApiService = {
     getAppointments: async (page = 0, size = 50, patientId = null) => {
         console.log('📥 Fetching appointments...');
         try {
-            let url = `${CONFIG.ADMIN_API_URL}/api/appointments?page=${page}&size=${size}`;
+            let url = `${CONFIG.ADMIN_API_URL}/api/admin/appointments?page=${page}&size=${size}`;
             if (patientId) {
                 url += `&patientId=${patientId}`;
             }
