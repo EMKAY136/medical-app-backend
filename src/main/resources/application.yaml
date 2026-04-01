@@ -1,16 +1,19 @@
 server:
-  port: ${PORT:8080}
+  port: ${PORT:5000}
   address: 0.0.0.0
 
 spring:
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  
   datasource:
-    url: jdbc:mysql://${MYSQLHOST}:${MYSQLPORT}/${MYSQLDATABASE}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&enabledTLSProtocols=TLSv1.2
-    username: ${MYSQLUSER:EMKAY}
-    password: ${MYSQLPASSWORD:mikel2006@}
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/medical_app?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&enabledTLSProtocols=TLSv1.2}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:mikel2006@}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      maximum-pool-size: 5  # Reduced from 20 to save memory
-      minimum-idle: 2        # Reduced from 5
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      minimum-idle: 2
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
@@ -18,15 +21,14 @@ spring:
   jpa:
     hibernate:
       ddl-auto: ${JPA_DDL_AUTO:update}
-    show-sql: false  # Always false to reduce logging overhead
+    show-sql: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQL8Dialect
-        format_sql: false  # Disabled to save memory
-        use_sql_comments: false  # Disabled to save memory
+        format_sql: false
+        use_sql_comments: false
     defer-datasource-initialization: true
   
-  # CRITICAL: Enable lazy initialization to reduce startup memory
   main:
     lazy-initialization: true
 
@@ -54,8 +56,8 @@ jwt:
 
 app:
   file:
-    upload-dir: uploads/results
-    export-dir: uploads/exports
+    upload-dir: ${UPLOAD_DIR:/tmp/uploads/results}
+    export-dir: ${EXPORT_DIR:/tmp/uploads/exports}
     max-size: 500MB
 
   support:
@@ -67,14 +69,14 @@ app:
     emergency-contact: "+234-XXX-XXXX"
 
   export:
-    storage-dir: exports
+    storage-dir: ${EXPORT_STORAGE_DIR:/tmp/exports}
     max-file-size: 500MB
     retention-days: 7
     allowed-formats: JSON,XML,CSV,FHIR,PDF
 
   security:
     cors:
-      allowed-origins: ${CORS_ORIGINS:https://qualitest-admin-jjb2y3eqk-akapomicheal2006-6545s-projects.vercel.app,https://qualitest-admin.vercel.app,http://localhost:3000,http://localhost:5173,http://localhost:8000,http://localhost:8081}
+      allowed-origins: ${CORS_ORIGINS:http://localhost:3000,http://localhost:5173,http://127.0.0.1:5500,http://localhost:5500,http://172.16.60.226:3000,http://172.16.60.226:8081,exp://172.16.60.226:8081,exp://172.16.60.226:19000,http://172.16.60.226:19000}
       allowed-methods: GET,POST,PUT,DELETE,OPTIONS,PATCH,HEAD
       allowed-headers: Authorization,Content-Type,Accept,Origin,X-Requested-With,Access-Control-Request-Method,Access-Control-Request-Headers
       allow-credentials: true
@@ -91,40 +93,59 @@ app:
     push:
       enabled: true
 
-# Reduced logging to save memory
 logging:
   level:
-    com.medicalapp.medical_app_backend: INFO  # Changed from DEBUG
-    org.springframework.security: WARN        # Changed from DEBUG
-    org.springframework.web: WARN             # Changed from DEBUG
-    org.springframework.web.cors: WARN        # Changed from DEBUG
-    org.hibernate.SQL: ERROR                  # Changed from WARN
+    com.medicalapp.medical_app_backend: ${LOG_LEVEL:INFO}
+    org.springframework.security: WARN
+    org.springframework.web: WARN
+    org.springframework.web.cors: WARN
+    org.hibernate.SQL: ERROR
     org.hibernate.type.descriptor.sql.BasicBinder: ERROR
   pattern:
-    console: "%d{HH:mm:ss} - %msg%n"  # Simplified pattern
+    console: "%d{HH:mm:ss} - %msg%n"
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics
   endpoint:
     health:
       show-details: always
+  health:
+    defaults:
+      enabled: true
 
 ---
+# Development Profile
 spring:
   config:
     activate:
-      on-profile: production
+      on-profile: dev
 
   datasource:
-    url: jdbc:mysql://${MYSQLHOST}:${MYSQLPORT}/${MYSQLDATABASE}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&enabledTLSProtocols=TLSv1.2
-    username: ${MYSQLUSER}
-    password: ${MYSQLPASSWORD}
+    url: jdbc:mysql://localhost:3306/medical_app?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: root
+    password: mikel2006@
+
+logging:
+  level:
+    com.medicalapp.medical_app_backend: DEBUG
+
+---
+# Production Profile (Railway)
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
     hikari:
-      maximum-pool-size: 5
-      minimum-idle: 2
+      maximum-pool-size: 10
+      minimum-idle: 5
 
   jpa:
     hibernate:
@@ -132,7 +153,7 @@ spring:
     show-sql: false
   
   main:
-    lazy-initialization: true
+    lazy-initialization: false
 
 logging:
   level:
@@ -141,10 +162,11 @@ logging:
     org.springframework.web: WARN
 
 app:
+  file:
+    upload-dir: /tmp/uploads/results
+    export-dir: /tmp/uploads/exports
+  export:
+    storage-dir: /tmp/exports
   security:
     cors:
-      allowed-origins: ${CORS_ORIGINS:https://qualitest-admin-jjb2y3eqk-akapomicheal2006-6545s-projects.vercel.app,https://qualitest-admin.vercel.app}
-      allowed-methods: GET,POST,PUT,DELETE,OPTIONS,PATCH,HEAD
-      allowed-headers: Authorization,Content-Type,Accept,Origin,X-Requested-With,Access-Control-Request-Method,Access-Control-Request-Headers
-      allow-credentials: true
-      max-age: 3600
+      allowed-origins: ${CORS_ORIGINS}

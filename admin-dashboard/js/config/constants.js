@@ -1,9 +1,14 @@
+const USE_LOCAL = true; // 👈 flip to false for production
+
+const BASE_URL = USE_LOCAL
+    ? 'http://172.16.60.226:5000'
+    : 'https://meticulous-clarity-production.up.railway.app';
+
 const CONFIG = {
-    // FIXED: Added /api prefix to match backend endpoints
-    API_BASE_URL: 'https://meticulous-clarity-production.up.railway.app',
-    ADMIN_API_URL: 'https://meticulous-clarity-production.up.railway.app',
-    // WebSocket URL - SockJS handles the upgrade
-    WS_URL: 'https://meticulous-clarity-production.up.railway.app/ws',
+    API_BASE_URL: BASE_URL,
+    ADMIN_API_URL: BASE_URL,
+    WS_URL: `${BASE_URL}/ws`,
+
     TEST_TYPES: [
         'Blood Sugar Test',
         'Blood Pressure Check',

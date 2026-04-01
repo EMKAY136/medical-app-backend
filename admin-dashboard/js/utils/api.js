@@ -1,20 +1,15 @@
 // js/utils/api.js
-// Fixed API configuration with CORS debugging
-// Note: CONFIG must be defined in constants.js before this file loads
-
 const ApiService = {
-    
-    // ✅ Authentication - Fixed with CORS debugging
+
+    // ✅ Authentication
     login: async (email, password) => {
         const loginUrl = `${CONFIG.API_BASE_URL}/api/auth/login`;
-        
+
         console.log('========== LOGIN REQUEST ==========');
         console.log('📍 URL:', loginUrl);
         console.log('📧 Email:', email);
-        console.log('🔐 Password length:', password?.length || 0);
         console.log('🌐 Frontend origin:', window.location.origin);
-        console.log('🌐 Frontend URL:', window.location.href);
-        
+
         try {
             const response = await fetch(loginUrl, {
                 method: 'POST',
@@ -22,7 +17,7 @@ const ApiService = {
                     'Content-Type': 'application/json',
                     'Accept': 'application/json',
                 },
-                credentials: 'include', // Include cookies if needed
+                credentials: 'include',
                 body: JSON.stringify({
                     email: email.trim(),
                     password: password
@@ -30,29 +25,8 @@ const ApiService = {
             });
 
             console.log('📊 Response Status:', response.status, response.statusText);
-            
-            // Log CORS and auth headers
-            console.log('📋 Response Headers (CORS & Auth):');
-            const headersToLog = [
-                'access-control-allow-origin',
-                'access-control-allow-credentials',
-                'access-control-allow-methods',
-                'access-control-allow-headers',
-                'authorization',
-                'content-type'
-            ];
-            
-            headersToLog.forEach(header => {
-                const value = response.headers.get(header);
-                if (value) {
-                    console.log(`  ${header}: ${value}`);
-                }
-            });
 
-            // Handle response status
             if (response.status === 0) {
-                console.error('❌ CORS Error: Request blocked by browser');
-                console.error('🚨 This means the backend is not sending CORS headers');
                 throw new Error('CORS Error: Backend CORS configuration may be incorrect');
             }
 
@@ -63,39 +37,24 @@ const ApiService = {
                 } catch (e) {
                     errorData = { message: response.statusText };
                 }
-                
-                console.error('❌ Login failed:');
-                console.error('  Status:', response.status);
-                console.error('  Error:', errorData);
-                
-                const errorMessage = errorData.message || errorData.error || `Login failed: ${response.status}`;
-                throw new Error(errorMessage);
+                throw new Error(errorData.message || errorData.error || `Login failed: ${response.status}`);
             }
 
             const data = await response.json();
-            
-            console.log('✅ Login successful!');
-            console.log('🔑 Token present:', !!data.token);
-            console.log('👤 User:', data.user?.email || 'Unknown');
-            console.log('===================================');
-            
-            // Validate response has token
+
             if (!data.token) {
-                console.error('❌ Response has no token!');
-                console.error('Response data:', data);
                 throw new Error('No authentication token received from server');
             }
-            
-            // Store token and user data
+
             localStorage.setItem('authToken', data.token);
             if (data.user) {
                 localStorage.setItem('user', JSON.stringify(data.user));
             }
             localStorage.setItem('loginTime', new Date().toISOString());
-            
-            console.log('✅ Token stored in localStorage');
-            console.log('✅ User data stored');
-            
+
+            console.log('✅ Login successful! Token stored.');
+            console.log('===================================');
+
             return {
                 success: true,
                 token: data.token,
@@ -104,61 +63,37 @@ const ApiService = {
             };
 
         } catch (error) {
-            console.error('❌ Login failed with exception:');
-            console.error('  Message:', error.message);
-            console.error('  Stack:', error.stack);
-            
-            // Provide specific error guidance
+            console.error('❌ Login error:', error.message);
+
             if (error.message.includes('CORS')) {
-                console.error('\n🚨 CORS Problem Detected:');
-                console.error('  Frontend origin:', window.location.origin);
-                console.error('  Backend URL:', CONFIG.API_BASE_URL);
-                console.error('  ➜ Make sure backend CORS_ORIGINS includes:', window.location.origin);
-                console.error('  ➜ Check Railway environment variables');
-                console.error('  ➜ Restart backend after changing CORS_ORIGINS');
+                console.error('➜ Add this origin to CORS_ORIGINS:', window.location.origin);
             } else if (error.message.includes('Failed to fetch')) {
-                console.error('\n🚨 Network Problem Detected:');
-                console.error('  Backend might be down or unreachable');
-                console.error('  Backend URL:', CONFIG.API_BASE_URL);
-                console.error('  ➜ Check Railway deployment status');
-                console.error('  ➜ Check if backend service is running');
-                console.error('  ➜ Try the health endpoint: ' + CONFIG.API_BASE_URL + '/health');
-            } else if (error.message.includes('401') || error.message.includes('Invalid')) {
-                console.error('\n🚨 Authentication Problem:');
-                console.error('  Check email and password are correct');
-                console.error('  Check user exists in database');
+                console.error('➜ Backend may be down. Check:', CONFIG.API_BASE_URL + '/actuator/health');
             }
-            
+
             throw error;
         }
     },
 
     logout: () => {
-        console.log('👋 Logging out...');
         localStorage.removeItem('authToken');
         localStorage.removeItem('user');
         localStorage.removeItem('loginTime');
-        console.log('✅ User logged out, tokens cleared');
+        console.log('✅ Logged out, tokens cleared');
     },
 
-    // Get stored token
-    getToken: () => {
-        return localStorage.getItem('authToken');
-    },
+    getToken: () => localStorage.getItem('authToken'),
 
-    // Get stored user data
     getUser: () => {
         const userJson = localStorage.getItem('user');
         return userJson ? JSON.parse(userJson) : null;
     },
 
-    // Check if authenticated
     isAuthenticated: () => {
         const token = localStorage.getItem('authToken');
         return !!token && token.length > 0;
     },
 
-    // Helper method to get auth headers
     getAuthHeaders: () => {
         const token = ApiService.getToken();
         return {
@@ -168,7 +103,7 @@ const ApiService = {
         };
     },
 
-    // Generic API request with error handling
+    // Generic API request
     apiRequest: async (endpoint, options = {}) => {
         const url = `${CONFIG.API_BASE_URL}${endpoint}`;
         const headers = {
@@ -184,7 +119,6 @@ const ApiService = {
             });
 
             if (response.status === 401) {
-                console.warn('⚠️ Unauthorized - token expired or invalid');
                 ApiService.logout();
                 throw new Error('Session expired. Please login again.');
             }
@@ -205,21 +139,20 @@ const ApiService = {
     getPatients: async (page = 0, size = 50) => {
         console.log('📥 Fetching patients...');
         try {
-            const response = await fetch(`${CONFIG.ADMIN_API_UR}/api/admin/patients?page=${page}&size=${size}`, {
+            // ✅ Fixed typo: ADMIN_API_UR → ADMIN_API_URL
+            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/patients?page=${page}&size=${size}`, {
                 method: 'GET',
                 headers: ApiService.getAuthHeaders()
             });
-            
+
             console.log('Patients response status:', response.status);
-            
-            if (response.status === 401) {
-                throw new Error('Authentication expired. Please login again.');
-            }
-            
+
+            if (response.status === 401) throw new Error('Authentication expired. Please login again.');
+
             if (response.ok) {
                 const data = await response.json();
                 console.log('Backend patients response:', data);
-                
+
                 if (data.success && data.patients) {
                     return {
                         patients: data.patients,
@@ -228,17 +161,16 @@ const ApiService = {
                         currentPage: data.currentPage || page
                     };
                 }
-                
                 return data;
             }
-            
+
             if (response.status === 404) {
                 console.log('Patients endpoint not found, using mock data');
                 return ApiService.getMockPatients();
             }
-            
+
             throw new Error('Failed to fetch patients');
-            
+
         } catch (error) {
             console.error('Error fetching patients:', error);
             if (error.message.includes('fetch') || error.message.includes('Failed to fetch')) {
@@ -273,53 +205,42 @@ const ApiService = {
         console.log('📥 Fetching appointments...');
         try {
             let url = `${CONFIG.ADMIN_API_URL}/api/admin/appointments?page=${page}&size=${size}`;
-            if (patientId) {
-                url += `&patientId=${patientId}`;
-            }
-            
+            if (patientId) url += `&patientId=${patientId}`;
+
             const response = await fetch(url, {
                 method: 'GET',
                 headers: ApiService.getAuthHeaders()
             });
-            
+
             console.log('Appointments response status:', response.status);
-            
-            if (response.status === 401) {
-                throw new Error('Authentication expired. Please login again.');
-            }
-            
-            if (response.ok) {
-                return response.json();
-            }
-            
+
+            if (response.status === 401) throw new Error('Authentication expired. Please login again.');
+            if (response.ok) return response.json();
+
             throw new Error('Failed to fetch appointments');
-            
+
         } catch (error) {
             console.error('Error fetching appointments:', error);
             throw error;
         }
     },
 
-   // Test Results
+    // Test Results
     getTestResults: async (page = 0, size = 50) => {
         console.log('📥 Fetching test results...');
         try {
-            // Try primary endpoint first
             const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/test-results?page=${page}&size=${size}`, {
                 method: 'GET',
                 headers: ApiService.getAuthHeaders()
             });
-            
+
             console.log('Test results response status:', response.status);
-            
-            if (response.status === 401) {
-                throw new Error('Authentication expired. Please login again.');
-            }
-            
+
+            if (response.status === 401) throw new Error('Authentication expired. Please login again.');
+
             if (response.ok) {
                 const data = await response.json();
-                console.log('Test results data:', data);
-                
+
                 if (data.success && data.results) {
                     return {
                         results: data.results,
@@ -328,31 +249,36 @@ const ApiService = {
                         currentPage: page
                     };
                 }
-                
                 return data;
             }
-            
+
             if (response.status === 404) {
                 console.log('Test results endpoint not found, using mock data');
                 return ApiService.getMockTestResults();
             }
-            
+
             throw new Error('Failed to fetch test results');
-            
+
         } catch (error) {
             console.error('Error fetching test results:', error);
             if (error.message.includes('fetch') || error.message.includes('Failed to fetch')) {
-                console.log('Network error, using mock test results data');
                 return ApiService.getMockTestResults();
             }
             throw error;
         }
     },
 
+    getMockTestResults: () => ({
+        results: [],
+        totalElements: 0,
+        totalPages: 0,
+        currentPage: 0
+    }),
+
     // Add test result
     addTestResult: async (resultData) => {
         console.log('📤 Adding test result:', resultData);
-        
+
         const backendData = {
             patientId: parseInt(resultData.patientId),
             testType: resultData.testType,
@@ -362,18 +288,19 @@ const ApiService = {
             doctorName: resultData.doctorName || 'Admin',
             testDate: resultData.testDate || new Date().toISOString().split('T')[0]
         };
-        
-        const response = await fetch(`${CONFIG.ADMIN_API_URL}/results/admin/upload`, {
+
+        // ✅ Fixed: added /api prefix to match other endpoints
+        const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/results/admin/upload`, {
             method: 'POST',
             headers: ApiService.getAuthHeaders(),
             body: JSON.stringify(backendData)
         });
-        
+
         if (!response.ok) {
-            const error = await response.json();
+            const error = await response.json().catch(() => ({ message: response.statusText }));
             throw new Error(error.message || 'Failed to add test result');
         }
-        
+
         return response.json();
     },
 
@@ -381,39 +308,24 @@ const ApiService = {
     getStatistics: async () => {
         console.log('📊 Fetching statistics...');
         try {
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/stats`, {
+            // ✅ Fixed: added /api prefix
+            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/stats`, {
                 method: 'GET',
                 headers: ApiService.getAuthHeaders()
             });
-            
-            if (response.status === 401) {
-                throw new Error('Authentication expired. Please login again.');
-            }
-            
-            if (response.ok) {
-                return response.json();
-            }
-            
-            return {
-                totalPatients: 0,
-                totalAppointments: 0,
-                totalResults: 0,
-                pendingAppointments: 0
-            };
-            
+
+            if (response.status === 401) throw new Error('Authentication expired. Please login again.');
+            if (response.ok) return response.json();
+
+            return { totalPatients: 0, totalAppointments: 0, totalResults: 0, pendingAppointments: 0 };
+
         } catch (error) {
             console.error('Error fetching statistics:', error);
-            return {
-                totalPatients: 0,
-                totalAppointments: 0,
-                totalResults: 0,
-                pendingAppointments: 0
-            };
+            return { totalPatients: 0, totalAppointments: 0, totalResults: 0, pendingAppointments: 0 };
         }
     }
 };
 
-// Make ApiService globally available
 window.ApiService = ApiService;
 console.log('✅ ApiService initialized');
 console.log('   Backend URL:', CONFIG.API_BASE_URL);
