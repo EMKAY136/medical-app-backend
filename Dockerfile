@@ -12,14 +12,15 @@ COPY src ./src
 # Build the application
 RUN mvn clean package -DskipTests
 
-# Runtime stage  
+# Runtime stage
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
 # Copy the JAR file from build stage
 COPY --from=build /app/target/*.jar app.jar
 
-# Expose port (Render will use $PORT)
+# Expose port (Railway will use $PORT)
 EXPOSE 8080
 
 # Run the application
+ENTRYPOINT ["java", "-Xmx450m", "-Xms256m", "-Dserver.port=${PORT:-8080}", "-jar", "app.jar"]
