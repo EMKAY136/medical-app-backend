@@ -1,8 +1,8 @@
-const USE_LOCAL = true; // 👈 flip to false for production
+const USE_LOCAL = false;
 
 const BASE_URL = USE_LOCAL
     ? 'http://172.16.60.226:5000'
-    : 'https://meticulous-clarity-production.up.railway.app';
+    : 'https://medical-app-backend-production-93f7.up.railway.app';
 
 const CONFIG = {
     API_BASE_URL: BASE_URL,

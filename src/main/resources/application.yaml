@@ -38,6 +38,7 @@ spring:
       max-file-size: 500MB
       max-request-size: 500MB
 
+  # Gmail SMTP - used in both dev and prod
   mail:
     host: smtp.gmail.com
     port: 587
@@ -89,7 +90,7 @@ app:
       api-key: ${SMS_API_KEY:}
     email:
       enabled: true
-      from: "noreply@medicalapp.com"
+      from: "qualitestmedical@gmail.com"
     push:
       enabled: true
 
@@ -128,6 +129,18 @@ spring:
     username: root
     password: mikel2006@
 
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: qualitestmedical@gmail.com
+    password: qmlwmmjrtkczfgyc
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
 logging:
   level:
     com.medicalapp.medical_app_backend: DEBUG
@@ -154,6 +167,18 @@ spring:
   
   main:
     lazy-initialization: false
+
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${MAIL_USERNAME:qualitestmedical@gmail.com}
+    password: ${MAIL_PASSWORD:qmlwmmjrtkczfgyc}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
 
 logging:
   level:

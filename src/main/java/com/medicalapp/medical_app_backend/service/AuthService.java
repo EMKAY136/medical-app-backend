@@ -11,9 +11,11 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
 
 @Service
 public class AuthService {
@@ -30,62 +32,164 @@ public class AuthService {
     @Autowired
     private JwtUtil jwtUtil;
 
-    // Register new user
-    public Map<String, Object> registerUser(String username, String email, String password, 
-                                           String firstName, String lastName) {
+    @Autowired
+    private EmailService emailService;
+
+    // ─── Register (sends OTP, does NOT save user yet) ──────────────────────────
+
+    public Map<String, Object> registerUser(String username, String email, String password,
+                                            String firstName, String lastName) {
         Map<String, Object> response = new HashMap<>();
 
-        // Check if username already exists
         if (userRepository.existsByUsername(username)) {
             response.put("success", false);
             response.put("message", "Username is already taken!");
             return response;
         }
 
-        // Check if email already exists
         if (userRepository.existsByEmail(email)) {
             response.put("success", false);
             response.put("message", "Email is already in use!");
             return response;
         }
 
-        // Create new user
+        // Generate 6-digit OTP
+        String otp = String.format("%06d", new Random().nextInt(999999));
+        LocalDateTime otpExpiry = LocalDateTime.now().plusMinutes(10);
+
+        // Save user but mark as unverified
         User user = new User();
         user.setUsername(username);
         user.setEmail(email);
         user.setPassword(passwordEncoder.encode(password));
         user.setFirstName(firstName);
         user.setLastName(lastName);
-        user.setRole(User.Role.PATIENT); // Default role
+        user.setRole(User.Role.PATIENT);
+        user.setEmailVerified(false);
+        user.setVerificationCode(otp);
+        user.setVerificationCodeExpiry(otpExpiry);
 
-        // Save user
-        User savedUser = userRepository.save(user);
+        userRepository.save(user);
+
+        // Send OTP email
+        emailService.sendVerificationEmail(email, otp);
 
         response.put("success", true);
-        response.put("message", "User registered successfully!");
-        response.put("userId", savedUser.getId());
-        
+        response.put("message", "Registration successful! Please check your email for the verification code.");
+        response.put("email", email);
+
         return response;
     }
 
-    // Login user
+    // ─── Verify OTP ─────────────────────────────────────────────────────────────
+
+    public Map<String, Object> verifyEmail(String email, String code) {
+        Map<String, Object> response = new HashMap<>();
+
+        Optional<User> userOpt = userRepository.findByEmail(email);
+
+        if (userOpt.isEmpty()) {
+            response.put("success", false);
+            response.put("message", "User not found!");
+            return response;
+        }
+
+        User user = userOpt.get();
+
+        if (user.isEmailVerified()) {
+            response.put("success", false);
+            response.put("message", "Email is already verified!");
+            return response;
+        }
+
+        if (user.getVerificationCodeExpiry().isBefore(LocalDateTime.now())) {
+            response.put("success", false);
+            response.put("message", "Verification code has expired. Please request a new one.");
+            return response;
+        }
+
+        if (!user.getVerificationCode().equals(code)) {
+            response.put("success", false);
+            response.put("message", "Invalid verification code!");
+            return response;
+        }
+
+        // Mark as verified
+        user.setEmailVerified(true);
+        user.setVerificationCode(null);
+        user.setVerificationCodeExpiry(null);
+        userRepository.save(user);
+
+        // Send welcome email
+        emailService.sendWelcomeEmail(email, user.getFirstName());
+
+        response.put("success", true);
+        response.put("message", "Email verified successfully! You can now log in.");
+
+        return response;
+    }
+
+    // ─── Resend OTP ──────────────────────────────────────────────────────────────
+
+    public Map<String, Object> resendVerificationCode(String email) {
+        Map<String, Object> response = new HashMap<>();
+
+        Optional<User> userOpt = userRepository.findByEmail(email);
+
+        if (userOpt.isEmpty()) {
+            response.put("success", false);
+            response.put("message", "User not found!");
+            return response;
+        }
+
+        User user = userOpt.get();
+
+        if (user.isEmailVerified()) {
+            response.put("success", false);
+            response.put("message", "Email is already verified!");
+            return response;
+        }
+
+        String newOtp = String.format("%06d", new Random().nextInt(999999));
+        user.setVerificationCode(newOtp);
+        user.setVerificationCodeExpiry(LocalDateTime.now().plusMinutes(10));
+        userRepository.save(user);
+
+        emailService.sendVerificationEmail(email, newOtp);
+
+        response.put("success", true);
+        response.put("message", "New verification code sent to your email.");
+
+        return response;
+    }
+
+    // ─── Login (blocks unverified users) ────────────────────────────────────────
+
     public Map<String, Object> loginUser(String username, String password) {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            // Authenticate user
             Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(username, password)
             );
 
             UserDetails userDetails = (UserDetails) authentication.getPrincipal();
-            String token = jwtUtil.generateToken(userDetails);
 
-            // Get user info
             Optional<User> userOpt = userRepository.findByUsername(username);
             if (userOpt.isPresent()) {
                 User user = userOpt.get();
-                
+
+                // Block login if email not verified
+                if (!user.isEmailVerified()) {
+                    response.put("success", false);
+                    response.put("message", "Please verify your email before logging in.");
+                    response.put("requiresVerification", true);
+                    response.put("email", user.getEmail());
+                    return response;
+                }
+
+                String token = jwtUtil.generateToken(userDetails);
+
                 response.put("success", true);
                 response.put("message", "Login successful!");
                 response.put("token", token);
@@ -100,7 +204,8 @@ public class AuthService {
         return response;
     }
 
-    // Helper method to create user response (without password)
+    // ─── Helper ──────────────────────────────────────────────────────────────────
+
     private Map<String, Object> createUserResponse(User user) {
         Map<String, Object> userResponse = new HashMap<>();
         userResponse.put("id", user.getId());

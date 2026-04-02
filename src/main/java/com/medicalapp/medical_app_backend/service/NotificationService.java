@@ -4,6 +4,9 @@ import com.medicalapp.medical_app_backend.entity.SupportTicket;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import com.medicalapp.medical_app_backend.repository.UserRepository;
+
+import com.medicalapp.medical_app_backend.service.EmailService;
+
 import com.medicalapp.medical_app_backend.entity.Notification;
 import com.medicalapp.medical_app_backend.entity.SecuritySettings;
 import com.medicalapp.medical_app_backend.repository.NotificationRepository;
@@ -12,8 +15,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.http.HttpHeaders;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -37,8 +38,8 @@ public class NotificationService {
 
     private static final Logger logger = LoggerFactory.getLogger(NotificationService.class);
 
-    @Autowired(required = false)
-    private JavaMailSender mailSender;
+   @Autowired
+    private EmailService emailService;
 
     @Autowired
     private RestTemplate restTemplate;
@@ -54,31 +55,16 @@ public class NotificationService {
 
     // ==================== EMAIL METHODS ====================
 
-    public void sendEmail(String toEmail, String subject, String content) {
-        try {
-            logger.info("=== SENDING REAL EMAIL ===");
-            logger.info("To: {}", toEmail);
-            logger.info("Subject: {}", subject);
-
-            if (mailSender == null) {
-                logger.error("JavaMailSender is not configured!");
-                return;
-            }
-
-            SimpleMailMessage message = new SimpleMailMessage();
-            message.setFrom("qualitestmedical@gmail.com");
-            message.setTo(toEmail);
-            message.setSubject(subject);
-            message.setText(content);
-
-            mailSender.send(message);
-
-            logger.info("EMAIL SENT SUCCESSFULLY to: {}", toEmail);
-
-        } catch (Exception e) {
-            logger.error("FAILED to send email to {}: {}", toEmail, e.getMessage());
-        }
+    // REPLACE the entire sendEmail() method with this:
+public void sendEmail(String toEmail, String subject, String content) {
+    try {
+        logger.info("=== SENDING EMAIL === To: {}", toEmail);
+        emailService.sendEmail(toEmail, subject, content);
+        logger.info("EMAIL SENT SUCCESSFULLY to: {}", toEmail);
+    } catch (Exception e) {
+        logger.error("FAILED to send email to {}: {}", toEmail, e.getMessage());
     }
+}
 
     // ==================== EMAIL VERIFICATION CODE ====================
 
@@ -130,12 +116,6 @@ public class NotificationService {
                     return;
                 }
             }
-
-            if (mailSender == null) {
-                logger.error("JavaMailSender is not configured!");
-                return;
-            }
-
             LocalDateTime now = LocalDateTime.now();
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MMMM dd, yyyy 'at' hh:mm a");
             String timestamp = now.format(formatter);
@@ -208,10 +188,7 @@ public class NotificationService {
                 }
             }
 
-            if (mailSender == null) {
-                logger.error("JavaMailSender is not configured!");
-                return;
-            }
+            
 
             LocalDateTime now = LocalDateTime.now();
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MMMM dd, yyyy 'at' hh:mm a");
