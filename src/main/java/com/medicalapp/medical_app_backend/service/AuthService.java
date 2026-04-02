@@ -35,7 +35,7 @@ public class AuthService {
     @Autowired
     private EmailService emailService;
 
-    // ─── Register (sends OTP, does NOT save user yet) ──────────────────────────
+    // ─── Register ──────────────────────────────────────────────────────────────
 
     public Map<String, Object> registerUser(String username, String email, String password,
                                             String firstName, String lastName) {
@@ -53,11 +53,9 @@ public class AuthService {
             return response;
         }
 
-        // Generate 6-digit OTP
         String otp = String.format("%06d", new Random().nextInt(999999));
         LocalDateTime otpExpiry = LocalDateTime.now().plusMinutes(10);
 
-        // Save user but mark as unverified
         User user = new User();
         user.setUsername(username);
         user.setEmail(email);
@@ -66,12 +64,11 @@ public class AuthService {
         user.setLastName(lastName);
         user.setRole(User.Role.PATIENT);
         user.setEmailVerified(false);
-        user.setVerificationCode(otp);
-        user.setVerificationCodeExpiry(otpExpiry);
+        user.setResetCode(otp);
+        user.setResetCodeExpiry(otpExpiry);
 
         userRepository.save(user);
 
-        // Send OTP email
         emailService.sendVerificationEmail(email, otp);
 
         response.put("success", true);
@@ -102,25 +99,23 @@ public class AuthService {
             return response;
         }
 
-        if (user.getVerificationCodeExpiry().isBefore(LocalDateTime.now())) {
+        if (user.getResetCodeExpiry().isBefore(LocalDateTime.now())) {
             response.put("success", false);
             response.put("message", "Verification code has expired. Please request a new one.");
             return response;
         }
 
-        if (!user.getVerificationCode().equals(code)) {
+        if (!user.getResetCode().equals(code)) {
             response.put("success", false);
             response.put("message", "Invalid verification code!");
             return response;
         }
 
-        // Mark as verified
         user.setEmailVerified(true);
-        user.setVerificationCode(null);
-        user.setVerificationCodeExpiry(null);
+        user.setResetCode(null);
+        user.setResetCodeExpiry(null);
         userRepository.save(user);
 
-        // Send welcome email
         emailService.sendWelcomeEmail(email, user.getFirstName());
 
         response.put("success", true);
@@ -151,8 +146,8 @@ public class AuthService {
         }
 
         String newOtp = String.format("%06d", new Random().nextInt(999999));
-        user.setVerificationCode(newOtp);
-        user.setVerificationCodeExpiry(LocalDateTime.now().plusMinutes(10));
+        user.setResetCode(newOtp);
+        user.setResetCodeExpiry(LocalDateTime.now().plusMinutes(10));
         userRepository.save(user);
 
         emailService.sendVerificationEmail(email, newOtp);
@@ -163,7 +158,7 @@ public class AuthService {
         return response;
     }
 
-    // ─── Login (blocks unverified users) ────────────────────────────────────────
+    // ─── Login ────────────────────────────────────────────────────────────────
 
     public Map<String, Object> loginUser(String username, String password) {
         Map<String, Object> response = new HashMap<>();
@@ -179,7 +174,6 @@ public class AuthService {
             if (userOpt.isPresent()) {
                 User user = userOpt.get();
 
-                // Block login if email not verified
                 if (!user.isEmailVerified()) {
                     response.put("success", false);
                     response.put("message", "Please verify your email before logging in.");
