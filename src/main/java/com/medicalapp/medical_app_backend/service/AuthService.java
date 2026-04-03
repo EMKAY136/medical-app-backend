@@ -11,11 +11,9 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Random;
 
 @Service
 public class AuthService {
@@ -31,9 +29,6 @@ public class AuthService {
 
     @Autowired
     private JwtUtil jwtUtil;
-
-    @Autowired
-    private EmailService emailService;
 
     // ─── Register ──────────────────────────────────────────────────────────────
 
@@ -53,9 +48,6 @@ public class AuthService {
             return response;
         }
 
-        String otp = String.format("%06d", new Random().nextInt(999999));
-        LocalDateTime otpExpiry = LocalDateTime.now().plusMinutes(10);
-
         User user = new User();
         user.setUsername(username);
         user.setEmail(email);
@@ -63,22 +55,20 @@ public class AuthService {
         user.setFirstName(firstName);
         user.setLastName(lastName);
         user.setRole(User.Role.PATIENT);
-        user.setEmailVerified(false);
-        user.setResetCode(otp);
-        user.setResetCodeExpiry(otpExpiry);
+        user.setEmailVerified(true);   // auto-verified — email disabled temporarily
+        user.setResetCode(null);
+        user.setResetCodeExpiry(null);
 
         userRepository.save(user);
 
-        emailService.sendVerificationEmail(email, otp);
-
         response.put("success", true);
-        response.put("message", "Registration successful! Please check your email for the verification code.");
+        response.put("message", "Registration successful! You can now log in.");
         response.put("email", email);
 
         return response;
     }
 
-    // ─── Verify OTP ─────────────────────────────────────────────────────────────
+    // ─── Verify OTP (disabled — kept for future use) ────────────────────────────
 
     public Map<String, Object> verifyEmail(String email, String code) {
         Map<String, Object> response = new HashMap<>();
@@ -94,37 +84,17 @@ public class AuthService {
         User user = userOpt.get();
 
         if (user.isEmailVerified()) {
-            response.put("success", false);
-            response.put("message", "Email is already verified!");
+            response.put("success", true);
+            response.put("message", "Email is already verified. You can log in.");
             return response;
         }
 
-        if (user.getResetCodeExpiry().isBefore(LocalDateTime.now())) {
-            response.put("success", false);
-            response.put("message", "Verification code has expired. Please request a new one.");
-            return response;
-        }
-
-        if (!user.getResetCode().equals(code)) {
-            response.put("success", false);
-            response.put("message", "Invalid verification code!");
-            return response;
-        }
-
-        user.setEmailVerified(true);
-        user.setResetCode(null);
-        user.setResetCodeExpiry(null);
-        userRepository.save(user);
-
-        emailService.sendWelcomeEmail(email, user.getFirstName());
-
-        response.put("success", true);
-        response.put("message", "Email verified successfully! You can now log in.");
-
+        response.put("success", false);
+        response.put("message", "Email verification is currently unavailable. Please contact support.");
         return response;
     }
 
-    // ─── Resend OTP ──────────────────────────────────────────────────────────────
+    // ─── Resend OTP (disabled — kept for future use) ─────────────────────────────
 
     public Map<String, Object> resendVerificationCode(String email) {
         Map<String, Object> response = new HashMap<>();
@@ -140,21 +110,13 @@ public class AuthService {
         User user = userOpt.get();
 
         if (user.isEmailVerified()) {
-            response.put("success", false);
-            response.put("message", "Email is already verified!");
+            response.put("success", true);
+            response.put("message", "Email is already verified. You can log in.");
             return response;
         }
 
-        String newOtp = String.format("%06d", new Random().nextInt(999999));
-        user.setResetCode(newOtp);
-        user.setResetCodeExpiry(LocalDateTime.now().plusMinutes(10));
-        userRepository.save(user);
-
-        emailService.sendVerificationEmail(email, newOtp);
-
-        response.put("success", true);
-        response.put("message", "New verification code sent to your email.");
-
+        response.put("success", false);
+        response.put("message", "Email verification is currently unavailable. Please contact support.");
         return response;
     }
 
@@ -173,14 +135,6 @@ public class AuthService {
             Optional<User> userOpt = userRepository.findByUsername(username);
             if (userOpt.isPresent()) {
                 User user = userOpt.get();
-
-                if (!user.isEmailVerified()) {
-                    response.put("success", false);
-                    response.put("message", "Please verify your email before logging in.");
-                    response.put("requiresVerification", true);
-                    response.put("email", user.getEmail());
-                    return response;
-                }
 
                 String token = jwtUtil.generateToken(userDetails);
 
