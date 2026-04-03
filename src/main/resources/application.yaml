@@ -38,18 +38,21 @@ spring:
       max-file-size: 500MB
       max-request-size: 500MB
 
-  # Gmail SMTP - used in both dev and prod
   mail:
     host: smtp.gmail.com
-    port: 587
+    port: 465
     username: ${MAIL_USERNAME:qualitestmedical@gmail.com}
     password: ${MAIL_PASSWORD:qmlwmmjrtkczfgyc}
     properties:
       mail:
         smtp:
           auth: true
-          starttls:
+          ssl:
             enable: true
+            trust: smtp.gmail.com
+          starttls:
+            enable: false
+            required: false
 
 jwt:
   secret: ${JWT_SECRET:MedicalAppSecretKeyForauthTokenGeneration2024ChangeThisInProduction}
@@ -131,15 +134,19 @@ spring:
 
   mail:
     host: smtp.gmail.com
-    port: 587
+    port: 465
     username: qualitestmedical@gmail.com
     password: qmlwmmjrtkczfgyc
     properties:
       mail:
         smtp:
           auth: true
-          starttls:
+          ssl:
             enable: true
+            trust: smtp.gmail.com
+          starttls:
+            enable: false
+            required: false
 
 logging:
   level:
@@ -170,15 +177,19 @@ spring:
 
   mail:
     host: smtp.gmail.com
-    port: 587
+    port: 465
     username: ${MAIL_USERNAME:qualitestmedical@gmail.com}
     password: ${MAIL_PASSWORD:qmlwmmjrtkczfgyc}
     properties:
       mail:
         smtp:
           auth: true
-          starttls:
+          ssl:
             enable: true
+            trust: smtp.gmail.com
+          starttls:
+            enable: false
+            required: false
 
 logging:
   level:

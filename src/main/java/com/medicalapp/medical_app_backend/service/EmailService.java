@@ -25,6 +25,7 @@ public class EmailService {
 
     public void sendEmail(String toEmail, String subject, String htmlContent) {
         try {
+            log.info("=== SENDING EMAIL === To: {}", toEmail);
             MimeMessage message = javaMailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
             helper.setFrom(gmailUsername);
@@ -32,9 +33,9 @@ public class EmailService {
             helper.setSubject(subject);
             helper.setText(htmlContent, true);
             javaMailSender.send(message);
-            log.info("=== EMAIL SENT VIA GMAIL to: {} ===", toEmail);
+            log.info("=== EMAIL SENT VIA GMAIL (SSL/465) to: {} ===", toEmail);
         } catch (Exception e) {
-            log.error("Gmail error sending to {}: {}", toEmail, e.getMessage());
+            log.error("Gmail error sending to {}: {}", toEmail, e.getMessage(), e);
             throw new RuntimeException("Failed to send email via Gmail", e);
         }
     }
