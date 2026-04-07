@@ -109,8 +109,18 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/auth/refresh").permitAll()
                 .requestMatchers(HttpMethod.GET, "/auth/**").permitAll()
 
+                // ✅ Public support endpoints (no auth needed)
+                .requestMatchers(HttpMethod.GET, "/api/support/status").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/support/faq").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/support/health").permitAll()
+
+                // 🔒 Admin support endpoints (auth required)
+                .requestMatchers("/api/support/admin/**").authenticated()
+
+                // 🔒 All other support endpoints (auth required)
+                .requestMatchers("/api/support/**").authenticated()
+
                 // ✅ Other public endpoints
-                .requestMatchers("/api/support/**").permitAll()
                 .requestMatchers("/api/health").permitAll()
                 .requestMatchers("/actuator/health/**").permitAll()
                 .requestMatchers("/actuator/info").permitAll()
