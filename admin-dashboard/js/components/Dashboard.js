@@ -14,7 +14,12 @@ const MedicalAdminDashboard = () => {
     const [showNotificationForm, setShowNotificationForm] = useState(false);
     const [showAutoNotificationForm, setShowAutoNotificationForm] = useState(false);
     const [notificationTab, setNotificationTab] = useState('sent');
-    
+
+    // ── Support Chat State ──────────────────────────────────────
+    const [showSupportChat, setShowSupportChat] = useState(false);
+    const [supportChatPatient, setSupportChatPatient] = useState(null);
+    // ────────────────────────────────────────────────────────────
+
     const [formData, setFormData] = useState({
         recipientId: '',
         title: '',
@@ -62,29 +67,26 @@ const MedicalAdminDashboard = () => {
     };
 
     useEffect(() => {
-    if (isAuthenticated && window.AdminWebSocketClient) {
-        const wsClient = new window.AdminWebSocketClient();
-        wsClient.connect();
-        
-        // Expose functions for WebSocket callbacks
-        window.loadAppointments = loadAppointments;
-        window.loadPatients = loadPatients;
-        window.loadTestResults = loadTestResults;
-        window.loadStats = loadStats;
-        window.showNotificationAlert = showNotificationAlert;
-        
-        return () => {
-            wsClient.disconnect();
-            delete window.loadAppointments;
-            delete window.loadPatients;
-            delete window.loadTestResults;
-            delete window.loadStats;
-            delete window.showNotificationAlert;
-        };
-    }
-}, [isAuthenticated]);
+        if (isAuthenticated && window.AdminWebSocketClient) {
+            const wsClient = new window.AdminWebSocketClient();
+            wsClient.connect();
 
-    // Add this to your Admin Dashboard JavaScript file
+            window.loadAppointments = loadAppointments;
+            window.loadPatients = loadPatients;
+            window.loadTestResults = loadTestResults;
+            window.loadStats = loadStats;
+            window.showNotificationAlert = showNotificationAlert;
+
+            return () => {
+                wsClient.disconnect();
+                delete window.loadAppointments;
+                delete window.loadPatients;
+                delete window.loadTestResults;
+                delete window.loadStats;
+                delete window.showNotificationAlert;
+            };
+        }
+    }, [isAuthenticated]);
 
     const handleLoginSuccess = () => {
         console.log('Login successful');
@@ -104,53 +106,41 @@ const MedicalAdminDashboard = () => {
     };
 
     const loadDashboardData = async () => {
-    console.log('Loading dashboard data...');
-    setLoading(true);
-    try {
-        // Load patients first, then everything else
-        await loadPatients();  // ✅ Wait for this first
-        
-        await Promise.all([
-            loadAppointments(),
-            loadTestResults(),
-            loadNotifications(),
-            loadAutoNotifications()
-        ]);
-    } catch (error) {
-        console.error('Error loading dashboard data:', error);
-        showNotificationAlert('Error loading dashboard data', 'error');
-    } finally {
-        setLoading(false);
-    }
-};
-
+        console.log('Loading dashboard data...');
+        setLoading(true);
+        try {
+            await loadPatients();
+            await Promise.all([
+                loadAppointments(),
+                loadTestResults(),
+                loadNotifications(),
+                loadAutoNotifications()
+            ]);
+        } catch (error) {
+            console.error('Error loading dashboard data:', error);
+            showNotificationAlert('Error loading dashboard data', 'error');
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const loadStats = async () => {
         try {
             const today = new Date().toDateString();
-            
-            const todayAppointments = appointments.filter(apt => 
+
+            const todayAppointments = appointments.filter(apt =>
                 new Date(apt.appointmentDate || apt.scheduledDate).toDateString() === today
             ).length;
 
-            const pendingTests = appointments.filter(apt => 
+            const pendingTests = appointments.filter(apt =>
                 apt.status && (apt.status.toLowerCase() === 'scheduled' || apt.status.toLowerCase() === 'pending')
             ).length;
 
-            const completedReports = testResults.filter(result => 
+            const completedReports = testResults.filter(result =>
                 result.status && (result.status.toLowerCase() === 'completed' || result.status.toLowerCase() === 'normal')
             ).length;
 
             setStats({
-                totalPatients: patients.length,
-                todayAppointments,
-                pendingTests,
-                completedReports,
-                totalNotifications: notifications.length,
-                activeAutoRules: autoNotifications.filter(n => n.enabled).length
-            });
-
-            console.log('Stats updated:', {
                 totalPatients: patients.length,
                 todayAppointments,
                 pendingTests,
@@ -163,48 +153,38 @@ const MedicalAdminDashboard = () => {
         }
     };
 
-const loadPatients = async () => {
-    try {
-        console.log('🔍 Loading patients...');
-        const token = localStorage.getItem('authToken');
-        
-        // Make the request directly instead of using ApiService
-        const response = await fetch(
-            `${CONFIG.ADMIN_API_URL}/api/admin/patients?page=0&size=50`,
-            {
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
+    const loadPatients = async () => {
+        try {
+            console.log('Loading patients...');
+            const token = localStorage.getItem('authToken');
+            const response = await fetch(
+                `${CONFIG.ADMIN_API_URL}/api/admin/patients?page=0&size=50`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                    },
+                }
+            );
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const data = await response.json();
+            console.log('Patients loaded:', data);
+            if (data.patients && Array.isArray(data.patients)) {
+                setPatients(data.patients);
+            } else {
+                console.warn('No patients in response');
+                setPatients([]);
             }
-        );
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+        } catch (error) {
+            console.error('Error loading patients:', error);
+            showNotificationAlert('Error loading patients', 'error');
         }
-
-        const data = await response.json();
-        console.log('✅ Patients loaded:', data);
-        console.log('Patient count:', data.patients?.length || 0);
-        
-        if (data.patients && Array.isArray(data.patients)) {
-            setPatients(data.patients);
-            console.log('Patients set to state:', data.patients);
-        } else {
-            console.warn('No patients in response');
-            setPatients([]);
-        }
-    } catch (error) {
-        console.error('❌ Error loading patients:', error);
-        showNotificationAlert('Error loading patients', 'error');
-    }
-};
+    };
 
     const loadAppointments = async () => {
         try {
-            console.log('🔍 Loading appointments...');
+            console.log('Loading appointments...');
             const token = localStorage.getItem('authToken');
-
             const response = await fetch(
                 `${CONFIG.ADMIN_API_URL}/api/admin/appointments?page=0&size=50`,
                 {
@@ -214,24 +194,17 @@ const loadPatients = async () => {
                     },
                 }
             );
-
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json();
-            console.log('✅ Appointments loaded:', data);
-            console.log('Appointment count:', data.appointments?.length || 0);
-
+            console.log('Appointments loaded:', data);
             if (data.appointments && Array.isArray(data.appointments)) {
                 setAppointments(data.appointments);
-                console.log('Appointments set to state:', data.appointments);
             } else {
                 console.warn('No appointments in response');
                 setAppointments([]);
             }
         } catch (error) {
-            console.error('❌ Error loading appointments:', error);
+            console.error('Error loading appointments:', error);
             showNotificationAlert('Error loading appointments', 'error');
         }
     };
@@ -288,33 +261,24 @@ const loadPatients = async () => {
             showNotificationAlert('Please fill in all fields', 'error');
             return;
         }
-
         if (!formData.sendToAll && !formData.recipientId) {
             showNotificationAlert('Please select a patient or choose "Send to All"', 'error');
             return;
         }
-
         setLoading(true);
-
         try {
             const token = localStorage.getItem('authToken');
-            const endpoint = formData.sendToAll 
+            const endpoint = formData.sendToAll
                 ? `${CONFIG.ADMIN_API_URL}/api/admin/notifications/send-all`
                 : `${CONFIG.ADMIN_API_URL}/api/admin/notifications/send`;
-
             const payload = formData.sendToAll
                 ? { title: formData.title, message: formData.message, type: formData.type }
                 : { recipientId: parseInt(formData.recipientId), title: formData.title, message: formData.message, type: formData.type };
-
             const response = await fetch(endpoint, {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
-
             if (response.ok) {
                 showNotificationAlert('Notification sent successfully!');
                 setFormData({ recipientId: '', title: '', message: '', type: 'appointment', sendToAll: false });
@@ -336,20 +300,14 @@ const loadPatients = async () => {
             showNotificationAlert('Please fill in all fields', 'error');
             return;
         }
-
         setLoading(true);
-
         try {
             const token = localStorage.getItem('authToken');
             const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications`, {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify(autoFormData),
             });
-
             if (response.ok) {
                 showNotificationAlert('Auto-notification created successfully!');
                 setAutoFormData({ trigger: 'appointment_scheduled', title: '', message: '', type: 'appointment', enabled: true, delayMinutes: 0 });
@@ -374,7 +332,6 @@ const loadPatients = async () => {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${token}` },
                 });
-
                 if (response.ok) {
                     setNotifications(notifications.filter(n => n.id !== notificationId));
                     showNotificationAlert('Notification deleted');
@@ -393,10 +350,7 @@ const loadPatients = async () => {
                 headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled: !currentStatus }),
             });
-
-            if (response.ok) {
-                loadAutoNotifications();
-            }
+            if (response.ok) loadAutoNotifications();
         } catch (err) {
             console.error('Error toggling auto-notification:', err);
         }
@@ -410,7 +364,6 @@ const loadPatients = async () => {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${token}` },
                 });
-
                 if (response.ok) {
                     setAutoNotifications(autoNotifications.filter(n => n.id !== autoNotifId));
                     showNotificationAlert('Auto-notification deleted');
@@ -424,7 +377,6 @@ const loadPatients = async () => {
     const handleUpdateAppointment = async (appointmentId, newStatus) => {
         try {
             const response = await ApiService.updateAppointmentStatus(appointmentId, newStatus);
-            
             if (response.ok) {
                 showNotificationAlert(`Appointment ${newStatus.toLowerCase()} successfully!`);
                 await loadAppointments();
@@ -438,15 +390,10 @@ const loadPatients = async () => {
         }
     };
 
-    
-
     const handleAddResult = async (resultData) => {
         try {
             console.log('=== SUBMITTING TEST RESULT ===');
-            console.log('Result data:', resultData);
-            
             const hasFiles = resultData.attachments && resultData.attachments.length > 0;
-            
             let response;
             if (hasFiles) {
                 const formData = new FormData();
@@ -458,12 +405,8 @@ const loadPatients = async () => {
                 formData.append('status', resultData.status || 'COMPLETED');
                 formData.append('doctorName', resultData.doctorName || 'Admin');
                 formData.append('testDate', resultData.testDate || new Date().toISOString());
-                
-                if (resultData.appointmentId) {
-                    formData.append('appointmentId', resultData.appointmentId);
-                }
+                if (resultData.appointmentId) formData.append('appointmentId', resultData.appointmentId);
                 formData.append('markCompleted', resultData.markAppointmentCompleted || false);
-                
                 const attachment = resultData.attachments[0];
                 const base64Data = attachment.data.split(',')[1];
                 const byteCharacters = atob(base64Data);
@@ -474,29 +417,18 @@ const loadPatients = async () => {
                 const byteArray = new Uint8Array(byteNumbers);
                 const blob = new Blob([byteArray], { type: attachment.type });
                 const file = new File([blob], attachment.name, { type: attachment.type });
-                
                 formData.append('file', file);
-                
                 const token = localStorage.getItem('authToken');
                 const fetchResponse = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/results/admin/upload-with-file`, {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    },
+                    headers: { 'Authorization': `Bearer ${token}` },
                     body: formData
                 });
-                
-                if (!fetchResponse.ok) {
-                    throw new Error(`Server returned ${fetchResponse.status}`);
-                }
-                
+                if (!fetchResponse.ok) throw new Error(`Server returned ${fetchResponse.status}`);
                 response = await fetchResponse.json();
             } else {
                 response = await ApiService.addTestResult(resultData);
             }
-            
-            console.log('API response:', response);
-            
             if (response.success) {
                 showNotificationAlert('Test result added successfully!');
                 setShowModal(null);
@@ -505,8 +437,7 @@ const loadPatients = async () => {
                 showNotificationAlert(response.message || 'Failed to add result', 'error');
             }
         } catch (error) {
-            console.error('=== ERROR ADDING TEST RESULT ===');
-            console.error('Error:', error);
+            console.error('Error adding test result:', error);
             showNotificationAlert('Error: ' + error.message, 'error');
         }
     };
@@ -515,7 +446,6 @@ const loadPatients = async () => {
         const fullName = `${patient.firstName || ''} ${patient.lastName || ''}`.toLowerCase();
         const email = (patient.email || '').toLowerCase();
         const query = searchQuery.toLowerCase();
-        
         return fullName.includes(query) || email.includes(query);
     });
 
@@ -532,6 +462,14 @@ const loadPatients = async () => {
     const getTypeIcon = (type) => {
         const icons = { appointment: '📅', results: '📊', alert: '⚠️', reminder: '🔔' };
         return icons[type] || '📬';
+    };
+
+    const getCurrentUser = () => {
+        try {
+            return JSON.parse(localStorage.getItem('user_info') || '{}');
+        } catch {
+            return {};
+        }
     };
 
     console.log('Rendering dashboard, isAuthenticated:', isAuthenticated);
@@ -551,21 +489,23 @@ const loadPatients = async () => {
 
     return (
         <div className="dashboard" style={{ display: 'flex', minHeight: '100vh' }}>
-            {React.createElement(Sidebar, { 
-                currentView, 
-                setCurrentView, 
-                onLogout: handleLogout 
+            {React.createElement(Sidebar, {
+                currentView,
+                setCurrentView,
+                onLogout: handleLogout
             })}
+
             <div className="main-content" style={{ flex: 1, overflowY: 'auto' }}>
                 {React.createElement(Header)}
-                
+
                 {notification && (
                     <div className={`alert alert-${notification.type}`}>
                         <i className={`fas ${notification.type === 'success' ? 'fa-check-circle' : 'fa-exclamation-triangle'}`}></i>
                         {notification.message}
                     </div>
                 )}
-                
+
+                {/* ── DASHBOARD VIEW ── */}
                 {currentView === 'dashboard' && (
                     <div>
                         {React.createElement(StatsGrid, { stats })}
@@ -585,7 +525,8 @@ const loadPatients = async () => {
                         </div>
                     </div>
                 )}
-                
+
+                {/* ── PATIENTS VIEW ── */}
                 {currentView === 'patients' && React.createElement(PatientsView, {
                     patients: filteredPatients,
                     searchQuery,
@@ -594,17 +535,64 @@ const loadPatients = async () => {
                     setShowModal,
                     onUpdateAppointment: handleUpdateAppointment
                 })}
-                
+
+                {/* ── APPOINTMENTS VIEW ── */}
                 {currentView === 'appointments' && React.createElement(AppointmentsView, {
                     appointments,
                     setShowModal
                 })}
-                
+
+                {/* ── REPORTS VIEW ── */}
                 {currentView === 'reports' && React.createElement(ReportsView, {
                     testResults,
                     setShowModal
                 })}
 
+                {/* ── SUPPORT CHAT VIEW ── */}
+                {currentView === 'support' && (
+                    <div style={{ padding: '20px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ fontSize: '24px', fontWeight: 'bold', margin: 0 }}>
+                                <i className="fas fa-headset" style={{ marginRight: '10px', color: '#3b82f6' }}></i>
+                                Patient Support Chat
+                            </h2>
+                            <button
+                                className="btn btn-primary"
+                                onClick={() => {
+                                    setSupportChatPatient(null);
+                                    setShowSupportChat(true);
+                                }}
+                            >
+                                <i className="fas fa-comments" style={{ marginRight: '8px' }}></i>
+                                Open Support Center
+                            </button>
+                        </div>
+
+                        <div>
+                            <h3 style={{ fontSize: '15px', fontWeight: '600', marginBottom: '12px', color: '#374151' }}>
+                                Quick Chat with a Patient
+                            </h3>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                {patients.slice(0, 10).map(patient => (
+                                    <button
+                                        key={patient.id}
+                                        className="btn btn-secondary"
+                                        onClick={() => {
+                                            setSupportChatPatient(patient);
+                                            setShowSupportChat(true);
+                                        }}
+                                        style={{ fontSize: '13px' }}
+                                    >
+                                        <i className="fas fa-comment" style={{ marginRight: '6px' }}></i>
+                                        {patient.firstName} {patient.lastName}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* ── NOTIFICATIONS VIEW ── */}
                 {currentView === 'notifications' && (
                     <div style={{ padding: '20px', maxWidth: '1200px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
@@ -630,38 +618,34 @@ const loadPatients = async () => {
                                     <div style={{ background: '#f5f5f5', padding: '20px', borderRadius: '5px', marginBottom: '20px' }}>
                                         <label style={{ display: 'block', marginBottom: '10px' }}>
                                             <input type="checkbox" checked={formData.sendToAll} onChange={(e) => setFormData({ ...formData, sendToAll: e.target.checked })} />
-                                            Send to All Patients
+                                            {' '}Send to All Patients
                                         </label>
 
                                         {!formData.sendToAll && (
-    <div style={{ marginBottom: '10px' }}>
-        <label style={{ display: 'block', marginBottom: '5px' }}>
-            Select Patient ({patients.length} available)
-        </label>
-        {patients.length === 0 ? (
-            <div style={{ padding: '10px', background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '5px', color: '#856404' }}>
-                No patients found. Make sure patients are loaded first.
-            </div>
-        ) : (
-            <select 
-                value={formData.recipientId} 
-                onChange={(e) => {
-                    console.log('Selected patient ID:', e.target.value);
-                    setFormData({ ...formData, recipientId: e.target.value });
-                }} 
-                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}
-            >
-                <option value="">Choose a patient...</option>
-                {patients.map(patient => (
-                    <option key={patient.id} value={patient.id}>
-                        {patient.firstName} {patient.lastName} ({patient.email})
-                    </option>
-                ))}
-            </select>
-        )}
-    </div>
-)}
-
+                                            <div style={{ marginBottom: '10px' }}>
+                                                <label style={{ display: 'block', marginBottom: '5px' }}>
+                                                    Select Patient ({patients.length} available)
+                                                </label>
+                                                {patients.length === 0 ? (
+                                                    <div style={{ padding: '10px', background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '5px', color: '#856404' }}>
+                                                        No patients found. Make sure patients are loaded first.
+                                                    </div>
+                                                ) : (
+                                                    <select
+                                                        value={formData.recipientId}
+                                                        onChange={(e) => setFormData({ ...formData, recipientId: e.target.value })}
+                                                        style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}
+                                                    >
+                                                        <option value="">Choose a patient...</option>
+                                                        {patients.map(patient => (
+                                                            <option key={patient.id} value={patient.id}>
+                                                                {patient.firstName} {patient.lastName} ({patient.email})
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                )}
+                                            </div>
+                                        )}
 
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Type</label>
@@ -782,10 +766,10 @@ const loadPatients = async () => {
                                                         <div style={{ flex: 1 }}>
                                                             <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
                                                                 <h4 style={{ margin: 0, marginRight: '10px' }}>{autoNotif.title}</h4>
-                                                                <span style={{ 
-                                                                    padding: '2px 8px', 
-                                                                    borderRadius: '12px', 
-                                                                    fontSize: '12px', 
+                                                                <span style={{
+                                                                    padding: '2px 8px',
+                                                                    borderRadius: '12px',
+                                                                    fontSize: '12px',
                                                                     background: autoNotif.enabled ? '#d4edda' : '#f8d7da',
                                                                     color: autoNotif.enabled ? '#155724' : '#721c24'
                                                                 }}>
@@ -794,35 +778,21 @@ const loadPatients = async () => {
                                                             </div>
                                                             <p style={{ margin: '5px 0', color: '#666' }}>{autoNotif.message}</p>
                                                             <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>
-                                                                Trigger: {getTriggerLabel(autoNotif.trigger)} | 
-                                                                Delay: {autoNotif.delayMinutes} min | 
+                                                                Trigger: {getTriggerLabel(autoNotif.trigger)} |
+                                                                Delay: {autoNotif.delayMinutes} min |
                                                                 Type: {getTypeIcon(autoNotif.type)} {autoNotif.type}
                                                             </p>
                                                         </div>
                                                         <div style={{ display: 'flex', gap: '5px' }}>
-                                                            <button 
-                                                                onClick={() => handleToggleAutoNotification(autoNotif.id, autoNotif.enabled)} 
-                                                                style={{ 
-                                                                    padding: '5px 10px', 
-                                                                    background: autoNotif.enabled ? '#ffc107' : '#28a745',
-                                                                    color: 'white', 
-                                                                    border: 'none', 
-                                                                    borderRadius: '5px', 
-                                                                    cursor: 'pointer' 
-                                                                }}
+                                                            <button
+                                                                onClick={() => handleToggleAutoNotification(autoNotif.id, autoNotif.enabled)}
+                                                                style={{ padding: '5px 10px', background: autoNotif.enabled ? '#ffc107' : '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
                                                             >
                                                                 {autoNotif.enabled ? 'Disable' : 'Enable'}
                                                             </button>
-                                                            <button 
-                                                                onClick={() => handleDeleteAutoNotification(autoNotif.id)} 
-                                                                style={{ 
-                                                                    padding: '5px 10px', 
-                                                                    background: '#dc3545', 
-                                                                    color: 'white', 
-                                                                    border: 'none', 
-                                                                    borderRadius: '5px', 
-                                                                    cursor: 'pointer' 
-                                                                }}
+                                                            <button
+                                                                onClick={() => handleDeleteAutoNotification(autoNotif.id)}
+                                                                style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
                                                             >
                                                                 Delete
                                                             </button>
@@ -839,6 +809,9 @@ const loadPatients = async () => {
                 )}
             </div>
 
+            {/* ══════════════════════════════════════════
+                MODALS
+            ══════════════════════════════════════════ */}
 
             {showModal === 'add-result' && React.createElement(AddResultModal, {
                 patients,
@@ -859,8 +832,57 @@ const loadPatients = async () => {
                 showNotification: showNotificationAlert,
                 loadTestResults
             })}
+
+            {/* ── SUPPORT CHAT MODAL ── */}
+            {showSupportChat && window.ChatSupportModal && React.createElement(window.ChatSupportModal, {
+                onClose: () => {
+                    setShowSupportChat(false);
+                    setSupportChatPatient(null);
+                },
+                isAdmin: true,
+                currentUser: getCurrentUser(),
+                selectedPatient: supportChatPatient
+            })}
+
+            {/* ── FLOATING SUPPORT BUTTON (always visible on all views) ── */}
+            {!showSupportChat && (
+                <button
+                    onClick={() => {
+                        setSupportChatPatient(null);
+                        setShowSupportChat(true);
+                    }}
+                    title="Open Patient Support Chat"
+                    style={{
+                        position: 'fixed',
+                        bottom: '24px',
+                        right: '24px',
+                        width: '56px',
+                        height: '56px',
+                        borderRadius: '50%',
+                        backgroundColor: '#3b82f6',
+                        color: 'white',
+                        border: 'none',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '20px',
+                        boxShadow: '0 4px 14px rgba(59,130,246,0.5)',
+                        zIndex: 999,
+                        transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+                    }}
+                    onMouseEnter={e => {
+                        e.currentTarget.style.transform = 'scale(1.1)';
+                        e.currentTarget.style.boxShadow = '0 6px 20px rgba(59,130,246,0.65)';
+                    }}
+                    onMouseLeave={e => {
+                        e.currentTarget.style.transform = 'scale(1)';
+                        e.currentTarget.style.boxShadow = '0 4px 14px rgba(59,130,246,0.5)';
+                    }}
+                >
+                    <i className="fas fa-headset"></i>
+                </button>
+            )}
         </div>
     );
 };
-    
-    
