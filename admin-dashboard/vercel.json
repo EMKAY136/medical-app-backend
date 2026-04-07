@@ -1,5 +1,8 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    {
+      "source": "/((?!css|js|admin-websocket|favicon).*)",
+      "destination": "/index.html"
+    }
   ]
 }
