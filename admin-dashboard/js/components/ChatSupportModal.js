@@ -13,9 +13,8 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     const [ticketNumber, setTicketNumber] = useState(null);
     const messagesEndRef = useRef(null);
     const messageInputRef = useRef(null);
-    const activeConversationRef = useRef(null); // ← keeps polling in sync
+    const activeConversationRef = useRef(null);
 
-    // Keep ref in sync with state so the interval always has latest value
     useEffect(() => {
         activeConversationRef.current = activeConversation;
     }, [activeConversation]);
@@ -30,10 +29,8 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         scrollToBottom();
     }, [messages]);
 
-    // ── On mount: load status + conversations ──────────────────
     useEffect(() => {
         loadSupportStatus();
-
         if (isAdmin) {
             loadActiveChats();
         } else {
@@ -41,33 +38,29 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     }, [isAdmin]);
 
-    // ── When a selectedPatient is passed in, open their chat ───
     useEffect(() => {
         if (selectedPatient && isAdmin) {
             startConversationWithPatient(selectedPatient);
         }
     }, [selectedPatient]);
 
-    // ── Polling: single interval, reads activeConversationRef ──
     useEffect(() => {
         const interval = setInterval(() => {
             const conv = activeConversationRef.current;
             if (!conv) return;
-
             if (isAdmin) {
-                loadChatByUserId(conv.userId, false); // silent refresh
+                loadChatByUserId(conv.userId, true);
             } else {
-                loadChatHistory(false); // silent refresh
+                loadChatHistory(true);
             }
         }, 5000);
-
         return () => clearInterval(interval);
-    }, [isAdmin]); // only depends on isAdmin, not activeConversation
+    }, [isAdmin]);
 
-    // ──────────────────────────────────────────────────────────
+    // ✅ Fixed: /api/support/status
     const loadSupportStatus = async () => {
         try {
-            const response = await fetch(`${CONFIG.API_BASE_URL}/support/status`, {
+            const response = await fetch(`${CONFIG.API_BASE_URL}/api/support/status`, {
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
             });
             const data = await response.json();
@@ -81,7 +74,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         if (!isAdmin) return;
         try {
             setLoading(true);
-            // Uses ADMIN_API_URL — same server as the admin dashboard
             const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/active-chats`, {
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
             });
@@ -145,12 +137,11 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     };
 
-    // silent=true means don't show loading spinner (used for polling)
+    // ✅ Fixed: /api/support/chat/history
     const loadChatHistory = async (silent = false) => {
         try {
             if (!silent) setLoading(true);
-            // Patient endpoint — uses API_BASE_URL (patient-facing server)
-            const response = await fetch(`${CONFIG.API_BASE_URL}/support/chat/history`, {
+            const response = await fetch(`${CONFIG.API_BASE_URL}/api/support/chat/history`, {
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
             });
             const data = await response.json();
@@ -174,11 +165,9 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     };
 
-    // Admin fetches patient messages via ADMIN_API_URL
     const loadChatByUserId = async (userId, silent = false) => {
         try {
             if (!silent) setLoading(true);
-            // ✅ Fixed: use ADMIN_API_URL so admin can read patient messages
             const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/chat/${userId}`, {
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
             });
@@ -234,7 +223,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             let response;
 
             if (isAdmin) {
-                // ✅ Admin reply — uses ADMIN_API_URL
                 response = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/reply`, {
                     method: 'POST',
                     headers: {
@@ -248,8 +236,8 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     })
                 });
             } else {
-                // ✅ Patient message — uses API_BASE_URL (patient-facing server)
-                response = await fetch(`${CONFIG.API_BASE_URL}/support/chat/message`, {
+                // ✅ Fixed: /api/support/chat/message
+                response = await fetch(`${CONFIG.API_BASE_URL}/api/support/chat/message`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
@@ -262,14 +250,12 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             const data = await response.json();
 
             if (data.success) {
-                // Confirm the temp message as delivered
                 setMessages(prev => prev.map(msg =>
                     msg.id === tempMessage.id
                         ? { ...msg, status: 'delivered', id: data.messageId || msg.id }
                         : msg
                 ));
 
-                // Bot response for patient side
                 if (!isAdmin && data.botResponse) {
                     setTimeout(() => {
                         setMessages(prev => [...prev, {
@@ -284,7 +270,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     }, 1000);
                 }
 
-                // Update sidebar last message
                 const conv = activeConversationRef.current;
                 if (conv) {
                     setConversations(prev => prev.map(c =>
@@ -294,7 +279,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     ));
                 }
 
-                // Immediately re-fetch so both sides stay in sync
                 if (isAdmin && conv?.userId) {
                     loadChatByUserId(conv.userId, true);
                 } else if (!isAdmin) {
@@ -346,7 +330,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         conv.lastMessage?.toLowerCase().includes(searchQuery.toLowerCase())
     );
 
-    // ── RENDER ────────────────────────────────────────────────
     return (
         <div className="modal" style={{ zIndex: 1000 }}>
             <div className="modal-content" style={{
@@ -657,7 +640,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     );
 };
 
-// ── Quick Support Button ───────────────────────────────────────
 const SupportChatButton = ({ isAdmin, currentUser, patients = [], onPatientSelect }) => {
     const [showChat, setShowChat] = useState(false);
     const [selectedPatient, setSelectedPatient] = useState(null);
