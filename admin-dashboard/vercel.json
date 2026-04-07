@@ -1,7 +1,8 @@
 {
+  "outputDirectory": ".",
   "rewrites": [
     {
-      "source": "/((?!css|js|admin-websocket|favicon).*)",
+      "source": "/((?!css|js|admin-websocket).*)",
       "destination": "/index.html"
     }
   ]
