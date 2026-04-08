@@ -45,17 +45,23 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     }, [selectedPatient]);
 
     useEffect(() => {
-        const interval = setInterval(() => {
-            const conv = activeConversationRef.current;
-            if (!conv) return;
-            if (isAdmin) {
-                loadChatByUserId(conv.userId, true);
-            } else {
-                loadChatHistory(true);
-            }
-        }, 5000);
-        return () => clearInterval(interval);
-    }, [isAdmin]);
+    const interval = setInterval(() => {
+        const conv = activeConversationRef.current;
+        
+        // Always refresh the conversations list
+        if (isAdmin) {
+            loadActiveChats(true); // ADD THIS - refresh sidebar too
+        }
+        
+        if (!conv) return;
+        if (isAdmin) {
+            loadChatByUserId(conv.userId, true);
+        } else {
+            loadChatHistory(true);
+        }
+    }, 5000);
+    return () => clearInterval(interval);
+}, [isAdmin]);
 
     // ✅ Fixed: /api/support/status
     const loadSupportStatus = async () => {
@@ -70,38 +76,38 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     };
 
-    const loadActiveChats = async () => {
-        if (!isAdmin) return;
-        try {
-            setLoading(true);
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/active-chats`, {
-                headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
-            });
-            if (!response.ok) throw new Error('Failed to load chats');
-            const data = await response.json();
+    const loadActiveChats = async (silent = false) => {
+    if (!isAdmin) return;
+    try {
+        if (!silent) setLoading(true); // only show spinner on first load
+        
+        const response = await fetch(
+            `${CONFIG.ADMIN_API_URL}/api/support/admin/all-chats`,
+            { headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` } }
+        );
+        const data = await response.json();
 
-            if (data.success) {
-                setConversations(data.activeChats.map(chat => ({
-                    id: chat.ticketId || chat.userId,
-                    userId: chat.userId,
-                    patientName: chat.userName,
-                    patientEmail: chat.userEmail,
-                    lastMessage: chat.subject || 'New conversation',
-                    lastMessageTime: new Date(chat.createdAt),
-                    unreadCount: chat.status === 'NEEDS_RESPONSE' ? 1 : 0,
-                    status: chat.status || 'active',
-                    priority: chat.priority,
-                    ticketNumber: chat.ticketNumber
-                })));
-                setUnreadCount(data.activeChats.filter(c => c.status === 'NEEDS_RESPONSE').length);
-            }
-        } catch (error) {
-            console.error('Error loading conversations:', error);
-            setConversations([]);
-        } finally {
-            setLoading(false);
+        if (data.success) {
+            setConversations(data.chats.map(chat => ({
+                id: chat.ticketId || `user_${chat.userId}`,
+                userId: chat.userId,
+                patientName: chat.userName,
+                patientEmail: chat.userEmail,
+                lastMessage: chat.lastMessage || chat.subject || 'New conversation',
+                lastMessageTime: new Date(chat.lastActivity || chat.createdAt),
+                unreadCount: chat.conversationType === 'NEEDS_FIRST_RESPONSE' ? 1 : 0,
+                status: chat.status || 'active',
+                priority: chat.priority,
+                ticketNumber: chat.ticketNumber,
+                ticketId: chat.ticketId
+            })));
         }
-    };
+    } catch (error) {
+        console.error('Error loading conversations:', error);
+    } finally {
+        if (!silent) setLoading(false);
+    }
+};
 
     const startConversationWithPatient = (patient) => {
         const conversation = {
