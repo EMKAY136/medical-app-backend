@@ -91,7 +91,7 @@ public class SecurityConfig {
                 // ✅ OPTIONS preflight — must be first
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                // ✅ Auth POST endpoints — all public
+                // ✅ Public auth endpoints
                 .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/signup").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
@@ -99,18 +99,30 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/auth/verify-email-code").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/send-verification-email").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/verify-pre-signup-code").permitAll()
-
-                // ✅ Auth GET endpoints — all public
                 .requestMatchers(HttpMethod.GET, "/api/auth/**").permitAll()
 
-                // ✅ Legacy paths (no /api prefix)
+                // ✅ Legacy auth paths
                 .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/signup").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/refresh").permitAll()
                 .requestMatchers(HttpMethod.GET, "/auth/**").permitAll()
 
+                // ✅ Public support endpoints only
+                .requestMatchers(HttpMethod.GET, "/api/support/status").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/support/faq").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/support/health").permitAll()
+
+                // 🔒 Admin support endpoints — require authentication
+                .requestMatchers("/api/support/admin/**").authenticated()
+
+                // 🔒 Patient support endpoints — require authentication
+                .requestMatchers("/api/support/chat/**").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/support/ticket").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/support/chat/send").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/support/tickets").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/support/stats").authenticated()
+
                 // ✅ Other public endpoints
-                .requestMatchers("/api/support/**").permitAll()
                 .requestMatchers("/api/health").permitAll()
                 .requestMatchers("/actuator/health/**").permitAll()
                 .requestMatchers("/actuator/info").permitAll()
