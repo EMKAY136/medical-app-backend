@@ -15,6 +15,9 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     const messageInputRef = useRef(null);
     const activeConversationRef = useRef(null);
 
+    // ✅ Always get fresh token from ApiService
+    const getHeaders = () => ApiService.getAuthHeaders();
+
     useEffect(() => {
         activeConversationRef.current = activeConversation;
     }, [activeConversation]);
@@ -25,9 +28,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }, 100);
     };
 
-    useEffect(() => {
-        scrollToBottom();
-    }, [messages]);
+    useEffect(() => { scrollToBottom(); }, [messages]);
 
     useEffect(() => {
         loadSupportStatus();
@@ -45,30 +46,30 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     }, [selectedPatient]);
 
     useEffect(() => {
-    const interval = setInterval(() => {
-        const conv = activeConversationRef.current;
-        
-        // Always refresh the conversations list
-        if (isAdmin) {
-            loadActiveChats(true); // ADD THIS - refresh sidebar too
-        }
-        
-        if (!conv) return;
-        if (isAdmin) {
-            loadChatByUserId(conv.userId, true);
-        } else {
-            loadChatHistory(true);
-        }
-    }, 5000);
-    return () => clearInterval(interval);
-}, [isAdmin]);
+        const interval = setInterval(() => {
+            const conv = activeConversationRef.current;
 
-    // ✅ Fixed: /api/support/status
+            if (isAdmin) {
+                loadActiveChats(true);
+            }
+
+            if (!conv) return;
+
+            if (isAdmin) {
+                loadChatByUserId(conv.userId, true);
+            } else {
+                loadChatHistory(true);
+            }
+        }, 5000);
+        return () => clearInterval(interval);
+    }, [isAdmin]);
+
     const loadSupportStatus = async () => {
         try {
             const response = await fetch(`${CONFIG.API_BASE_URL}/api/support/status`, {
-                headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
+                headers: getHeaders()
             });
+            if (!response.ok) return;
             const data = await response.json();
             if (data.success) setSupportStatus(data);
         } catch (error) {
@@ -77,37 +78,49 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     };
 
     const loadActiveChats = async (silent = false) => {
-    if (!isAdmin) return;
-    try {
-        if (!silent) setLoading(true); // only show spinner on first load
-        
-        const response = await fetch(
-            `${CONFIG.ADMIN_API_URL}/api/support/admin/all-chats`,
-            { headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` } }
-        );
-        const data = await response.json();
+        if (!isAdmin) return;
+        try {
+            if (!silent) setLoading(true);
 
-        if (data.success) {
-            setConversations(data.chats.map(chat => ({
-                id: chat.ticketId || `user_${chat.userId}`,
-                userId: chat.userId,
-                patientName: chat.userName,
-                patientEmail: chat.userEmail,
-                lastMessage: chat.lastMessage || chat.subject || 'New conversation',
-                lastMessageTime: new Date(chat.lastActivity || chat.createdAt),
-                unreadCount: chat.conversationType === 'NEEDS_FIRST_RESPONSE' ? 1 : 0,
-                status: chat.status || 'active',
-                priority: chat.priority,
-                ticketNumber: chat.ticketNumber,
-                ticketId: chat.ticketId
-            })));
+            console.log('📥 Loading active chats, token:', ApiService.getToken()?.substring(0, 20) + '...');
+
+            const response = await fetch(
+                `${CONFIG.ADMIN_API_URL}/api/support/admin/all-chats`,
+                { headers: getHeaders() }  // ✅ uses ApiService.getAuthHeaders()
+            );
+
+            console.log('All chats response status:', response.status);
+
+            if (response.status === 401) {
+                console.error('❌ 401 on all-chats — token may be missing or invalid');
+                return;
+            }
+
+            if (!response.ok) return;
+
+            const data = await response.json();
+
+            if (data.success && data.chats) {
+                setConversations(data.chats.map(chat => ({
+                    id: chat.ticketId || `user_${chat.userId}`,
+                    userId: chat.userId,
+                    patientName: chat.userName,
+                    patientEmail: chat.userEmail,
+                    lastMessage: chat.lastMessage || chat.subject || 'New conversation',
+                    lastMessageTime: new Date(chat.lastActivity || chat.createdAt),
+                    unreadCount: chat.conversationType === 'NEEDS_FIRST_RESPONSE' ? 1 : 0,
+                    status: chat.status || 'active',
+                    priority: chat.priority,
+                    ticketNumber: chat.ticketNumber,
+                    ticketId: chat.ticketId
+                })));
+            }
+        } catch (error) {
+            console.error('Error loading conversations:', error);
+        } finally {
+            if (!silent) setLoading(false);
         }
-    } catch (error) {
-        console.error('Error loading conversations:', error);
-    } finally {
-        if (!silent) setLoading(false);
-    }
-};
+    };
 
     const startConversationWithPatient = (patient) => {
         const conversation = {
@@ -129,9 +142,9 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         try {
             const conversation = {
                 id: 'patient_chat',
-                userId: currentUser.id,
-                patientName: `${currentUser.firstName} ${currentUser.lastName}`,
-                patientEmail: currentUser.email,
+                userId: currentUser?.id,
+                patientName: `${currentUser?.firstName} ${currentUser?.lastName}`,
+                patientEmail: currentUser?.email,
                 adminName: 'Medical Support Team',
                 status: 'active'
             };
@@ -143,19 +156,28 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     };
 
-    // ✅ Fixed: /api/support/chat/history
     const loadChatHistory = async (silent = false) => {
         try {
             if (!silent) setLoading(true);
             const response = await fetch(`${CONFIG.API_BASE_URL}/api/support/chat/history`, {
-                headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
+                headers: getHeaders()
             });
+
+            if (response.status === 401) {
+                console.error('❌ 401 on chat history');
+                return;
+            }
+
+            if (!response.ok) return;
+
             const data = await response.json();
 
             if (data.success) {
                 const formatted = data.messages.map(msg => ({
                     id: msg.id,
-                    senderId: msg.senderType === 'admin' || msg.senderType === 'support_agent' ? 'admin' : currentUser.id,
+                    senderId: msg.senderType === 'admin' || msg.senderType === 'support_agent'
+                        ? 'admin'
+                        : currentUser?.id,
                     senderName: msg.senderName,
                     senderType: msg.senderType,
                     message: msg.message,
@@ -174,15 +196,26 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     const loadChatByUserId = async (userId, silent = false) => {
         try {
             if (!silent) setLoading(true);
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/chat/${userId}`, {
-                headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` }
-            });
+            const response = await fetch(
+                `${CONFIG.ADMIN_API_URL}/api/support/admin/chat/${userId}`,
+                { headers: getHeaders() }
+            );
+
+            if (response.status === 401) {
+                console.error('❌ 401 on chat by userId');
+                return;
+            }
+
+            if (!response.ok) return;
+
             const data = await response.json();
 
             if (data.success) {
                 const formatted = data.messages.map(msg => ({
                     id: msg.id,
-                    senderId: msg.senderType === 'admin' || msg.senderType === 'support_agent' ? currentUser.id : userId,
+                    senderId: msg.senderType === 'admin' || msg.senderType === 'support_agent'
+                        ? currentUser?.id
+                        : userId,
                     senderName: msg.senderName,
                     senderType: msg.senderType,
                     message: msg.message,
@@ -216,8 +249,10 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
 
         const tempMessage = {
             id: `temp_${Date.now()}`,
-            senderId: currentUser.id,
-            senderName: isAdmin ? 'Medical Support' : `${currentUser.firstName} ${currentUser.lastName}`,
+            senderId: currentUser?.id,
+            senderName: isAdmin
+                ? 'Medical Support'
+                : `${currentUser?.firstName} ${currentUser?.lastName}`,
             senderType: isAdmin ? 'support_agent' : 'user',
             message: messageText,
             timestamp: new Date(),
@@ -231,10 +266,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             if (isAdmin) {
                 response = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/reply`, {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
-                        'Content-Type': 'application/json'
-                    },
+                    headers: getHeaders(),
                     body: JSON.stringify({
                         userId: activeConversationRef.current?.userId,
                         message: messageText,
@@ -242,15 +274,20 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     })
                 });
             } else {
-                // ✅ Fixed: /api/support/chat/message
                 response = await fetch(`${CONFIG.API_BASE_URL}/api/support/chat/message`, {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
-                        'Content-Type': 'application/json'
-                    },
+                    headers: getHeaders(),
                     body: JSON.stringify({ message: messageText })
                 });
+            }
+
+            if (response.status === 401) {
+                throw new Error('Session expired. Please login again.');
+            }
+
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({ message: response.statusText }));
+                throw new Error(err.message || 'Failed to send message');
             }
 
             const data = await response.json();
@@ -298,7 +335,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         } catch (error) {
             console.error('Error sending message:', error);
             setMessages(prev => prev.filter(msg => msg.id !== tempMessage.id));
-            alert('Failed to send message. Please try again.');
+            alert('Failed to send message: ' + error.message);
         } finally {
             setSending(false);
         }
@@ -440,7 +477,8 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                                                 padding: '12px 16px',
                                                 cursor: 'pointer',
                                                 borderBottom: '1px solid #e5e7eb',
-                                                backgroundColor: activeConversation?.id === conversation.id ? '#dbeafe' : 'transparent'
+                                                backgroundColor: activeConversation?.id === conversation.id
+                                                    ? '#dbeafe' : 'transparent'
                                             }}
                                             onMouseEnter={(e) => {
                                                 if (activeConversation?.id !== conversation.id)
