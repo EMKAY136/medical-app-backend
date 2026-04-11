@@ -5,14 +5,25 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     const [filterPayment, setFilterPayment] = useState('all');
     const [filterDate, setFilterDate] = useState('');
     const [actionLoading, setActionLoading] = useState(null);
-    const [activeSection, setActiveSection] = useState('pending-payments'); // 'pending-payments' | 'all-appointments'
+    const [activeSection, setActiveSection] = useState('pending-payments');
+    const [editingGroup, setEditingGroup] = useState(null);
+    const [editTests, setEditTests] = useState([]);
+    const [savingTests, setSavingTests] = useState(false);
 
-    // ── Date parser ──────────────────────────────────────────────────────────
+    // ── Date parser — treats bare ISO strings as LOCAL time (no UTC shift) ───
     const parseDate = (v) => {
         if (!v) return null;
         try {
             if (Array.isArray(v)) {
                 const [yr, mo, dy, hr = 0, mn = 0] = v;
+                return new Date(yr, mo - 1, dy, hr, mn);
+            }
+            const s = String(v).trim();
+            // No timezone suffix → parse as local to avoid UTC hour shift
+            if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !s.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(s)) {
+                const [datePart, timePart] = s.split('T');
+                const [yr, mo, dy] = datePart.split('-').map(Number);
+                const [hr, mn] = timePart.split(':').map(Number);
                 return new Date(yr, mo - 1, dy, hr, mn);
             }
             const d = new Date(v);
@@ -23,10 +34,16 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     const fmtDate = (v) => {
         const d = parseDate(v);
         if (!d) return 'Not scheduled';
-        return `${d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })} at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        return `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     };
 
-    // ── Payment helpers ──────────────────────────────────────────────────────
+    // ── Price helpers ────────────────────────────────────────────────────────
+    const parsePrice = (str) =>
+        parseInt((str || '').replace(/[₦,\s]/g, '').split('.')[0], 10) || 0;
+
+    const formatNaira = (n) => '₦' + n.toLocaleString('en-NG') + '.00';
+
+    // ── Badge helpers ────────────────────────────────────────────────────────
     const getPaymentBadge = (ps) => {
         switch ((ps || '').toUpperCase()) {
             case 'PAID':                 return { label: 'Paid',              bg: '#d1fae5', color: '#065f46', icon: '✅' };
@@ -46,47 +63,134 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         }
     };
 
-    // ── Pending payments (patient clicked "I Have Paid") ─────────────────────
-    const pendingPayments = useMemo(() =>
-        appointments.filter(a => (a.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION'),
-        [appointments]
-    );
+    // ── Group same-patient same-datetime appointments into one card ──────────
+    const groupAppointments = (list) => {
+        const groups = {};
+        list.forEach(apt => {
+            const dateVal = apt.appointmentDate || apt.scheduledDate || apt.date || apt.createdAt;
+            const d = parseDate(dateVal);
+            const dateKey = d
+                ? `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${d.getHours()}-${d.getMinutes()}`
+                : 'unknown';
+            const key = `${apt.patientId || apt.patientName || 'unknown'}_${dateKey}`;
 
-    // ── Approve payment ──────────────────────────────────────────────────────
-    const handleApprovePayment = async (appointmentId) => {
-        if (!window.confirm('Confirm that you have received this bank transfer?')) return;
-        setActionLoading(appointmentId + '-pay');
-        try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(
-                `${CONFIG.ADMIN_API_URL}/api/admin/appointments/${appointmentId}/approve-payment`,
-                { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } }
-            );
-            const data = await res.json();
-            if (data.success) {
-                window.showNotificationAlert && window.showNotificationAlert('Payment approved — patient has been notified ✅');
-                onRefresh && onRefresh();
-            } else {
-                alert(data.message || 'Failed to approve payment');
+            if (!groups[key]) {
+                groups[key] = {
+                    key,
+                    patientId: apt.patientId,
+                    patientName: apt.patientName,
+                    appointmentDate: dateVal,
+                    status: apt.status,
+                    paymentStatus: apt.paymentStatus,
+                    paymentMethod: apt.paymentMethod,
+                    appointments: [],
+                    totalPrice: 0,
+                };
             }
-        } catch (err) {
-            alert('Network error: ' + err.message);
-        } finally {
-            setActionLoading(null);
+            groups[key].appointments.push(apt);
+            groups[key].totalPrice += parsePrice(apt.price);
+
+            // Highest-priority status wins for the group label
+            const statuses = groups[key].appointments.map(a => (a.status || '').toUpperCase());
+            if (statuses.includes('SCHEDULED'))      groups[key].status = 'SCHEDULED';
+            else if (statuses.includes('MISSED'))    groups[key].status = 'MISSED';
+            else if (statuses.includes('COMPLETED')) groups[key].status = 'COMPLETED';
+            else if (statuses.includes('CANCELLED')) groups[key].status = 'CANCELLED';
+        });
+
+        return Object.values(groups).sort((a, b) => {
+            const da = parseDate(a.appointmentDate);
+            const db = parseDate(b.appointmentDate);
+            if (!da) return 1; if (!db) return -1;
+            return da - db;
+        });
+    };
+
+    // ── Pending payment groups ───────────────────────────────────────────────
+    const pendingPayments = useMemo(() => {
+        const pending = appointments.filter(a =>
+            (a.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION'
+        );
+        return groupAppointments(pending);
+    }, [appointments]);
+
+    // ── Status counts ────────────────────────────────────────────────────────
+    const counts = useMemo(() => ({
+        all:       appointments.length,
+        scheduled: appointments.filter(a => (a.status || '').toUpperCase() === 'SCHEDULED').length,
+        completed: appointments.filter(a => (a.status || '').toUpperCase() === 'COMPLETED').length,
+        missed:    appointments.filter(a => (a.status || '').toUpperCase() === 'MISSED').length,
+        cancelled: appointments.filter(a => (a.status || '').toUpperCase() === 'CANCELLED').length,
+    }), [appointments]);
+
+    // ── Filtered + grouped list ──────────────────────────────────────────────
+    const filteredGroups = useMemo(() => {
+        const filtered = appointments.filter(apt => {
+            const stOk  = filterStatus  === 'all' || (apt.status || '').toLowerCase() === filterStatus;
+            const payOk = filterPayment === 'all' || (apt.paymentStatus || '').toLowerCase() === filterPayment;
+            let dateOk  = true;
+            if (filterDate) {
+                const d = parseDate(apt.appointmentDate || apt.scheduledDate || apt.date || apt.createdAt);
+                dateOk = d ? d.toDateString() === new Date(filterDate).toDateString() : false;
+            }
+            return stOk && payOk && dateOk;
+        });
+        return groupAppointments(filtered);
+    }, [appointments, filterStatus, filterPayment, filterDate]);
+
+    // ── API helpers ──────────────────────────────────────────────────────────
+    const apiPatch = async (url) => {
+        const token = localStorage.getItem('authToken');
+        const res = await fetch(`${CONFIG.ADMIN_API_URL}${url}`, {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        return res.json();
+    };
+
+    const apiPut = async (url, body) => {
+        const token = localStorage.getItem('authToken');
+        const res = await fetch(`${CONFIG.ADMIN_API_URL}${url}`, {
+            method: 'PUT',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: body ? JSON.stringify(body) : undefined,
+        });
+        return res.json();
+    };
+
+    // ── Approve all appointments in a group ──────────────────────────────────
+    const handleApprovePayment = async (group) => {
+        if (!window.confirm(
+            `Confirm receipt of ${formatNaira(group.totalPrice)} for ${group.appointments.length} test(s) from ${group.patientName}?`
+        )) return;
+
+        for (const apt of group.appointments) {
+            setActionLoading(apt.id + '-pay');
+            try {
+                const data = await apiPatch(`/api/admin/appointments/${apt.id}/approve-payment`);
+                if (!data.success) {
+                    alert(data.message || `Failed to approve appointment #${apt.id}`);
+                    setActionLoading(null);
+                    return;
+                }
+            } catch (err) {
+                alert('Network error: ' + err.message);
+                setActionLoading(null);
+                return;
+            }
         }
+        setActionLoading(null);
+        window.showNotificationAlert && window.showNotificationAlert(
+            `Payment approved for ${group.patientName} — ${group.appointments.length} test(s) ✅`
+        );
+        onRefresh && onRefresh();
     };
 
     // ── Mark missed ──────────────────────────────────────────────────────────
-    const handleMarkMissed = async (appointmentId) => {
-        if (!window.confirm('Mark this appointment as missed?')) return;
-        setActionLoading(appointmentId + '-miss');
+    const handleMarkMissed = async (aptId) => {
+        setActionLoading(aptId + '-miss');
         try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(
-                `${CONFIG.ADMIN_API_URL}/api/admin/appointments/${appointmentId}/mark-missed`,
-                { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } }
-            );
-            const data = await res.json();
+            const data = await apiPatch(`/api/admin/appointments/${aptId}/mark-missed`);
             if (data.success) {
                 window.showNotificationAlert && window.showNotificationAlert('Appointment marked as missed');
                 onRefresh && onRefresh();
@@ -101,15 +205,12 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     };
 
     // ── Update status ────────────────────────────────────────────────────────
-    const handleUpdateStatus = async (appointmentId, newStatus) => {
-        setActionLoading(appointmentId + '-status');
+    const handleUpdateStatus = async (aptId, newStatus) => {
+        setActionLoading(aptId + '-status');
         try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(
-                `${CONFIG.ADMIN_API_URL}/api/admin/appointments/${appointmentId}/status?status=${newStatus}`,
-                { method: 'PUT', headers: { Authorization: `Bearer ${token}` } }
+            const data = await apiPut(
+                `/api/admin/appointments/${aptId}/status?status=${newStatus}`
             );
-            const data = await res.json();
             if (data.success) {
                 window.showNotificationAlert && window.showNotificationAlert(`Status updated to ${newStatus}`);
                 onRefresh && onRefresh();
@@ -123,83 +224,75 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         }
     };
 
-    // ── Counts for pills ─────────────────────────────────────────────────────
-    const counts = useMemo(() => ({
-        all:       appointments.length,
-        scheduled: appointments.filter(a => (a.status || '').toUpperCase() === 'SCHEDULED').length,
-        completed: appointments.filter(a => (a.status || '').toUpperCase() === 'COMPLETED').length,
-        missed:    appointments.filter(a => (a.status || '').toUpperCase() === 'MISSED').length,
-        cancelled: appointments.filter(a => (a.status || '').toUpperCase() === 'CANCELLED').length,
-    }), [appointments]);
+    // ── Apply status to every appointment in group ───────────────────────────
+    const handleGroupStatus = async (group, newStatus) => {
+        for (const apt of group.appointments) {
+            await handleUpdateStatus(apt.id, newStatus);
+        }
+    };
 
-    // ── Filtered all-appointments list ────────────────────────────────────────
-    const filtered = useMemo(() => {
-        return appointments
-            .filter(apt => {
-                const stOk  = filterStatus  === 'all' || (apt.status || '').toLowerCase() === filterStatus;
-                const payOk = filterPayment === 'all' || (apt.paymentStatus || '').toLowerCase() === filterPayment;
-                let dateOk  = true;
-                if (filterDate) {
-                    const d = parseDate(apt.appointmentDate || apt.scheduledDate || apt.date || apt.createdAt);
-                    dateOk = d ? d.toDateString() === new Date(filterDate).toDateString() : false;
-                }
-                return stOk && payOk && dateOk;
-            })
-            .sort((a, b) => {
-                const da = parseDate(a.appointmentDate || a.scheduledDate || a.date || a.createdAt);
-                const db = parseDate(b.appointmentDate || b.scheduledDate || b.date || b.createdAt);
-                if (!da) return 1; if (!db) return -1;
-                return da - db;
-            });
-    }, [appointments, filterStatus, filterPayment, filterDate]);
+    // ── Edit tests ───────────────────────────────────────────────────────────
+    const openEditTests = (group) => {
+        setEditingGroup(group);
+        setEditTests(group.appointments.map(a => ({
+            id: a.id,
+            testType: a.testType || a.reason || '',
+            price: a.price || '',
+            original: a.testType || a.reason || '',
+        })));
+    };
 
-    // ── Section toggle pills ─────────────────────────────────────────────────
+    const saveEditedTests = async () => {
+        setSavingTests(true);
+        try {
+            for (const t of editTests) {
+                await apiPut(`/api/admin/appointments/${t.id}`, {
+                    testType: t.testType,
+                    price: t.price,
+                });
+            }
+            window.showNotificationAlert && window.showNotificationAlert('Tests updated successfully ✅');
+            setEditingGroup(null);
+            setEditTests([]);
+            onRefresh && onRefresh();
+        } catch (err) {
+            alert('Error saving tests: ' + err.message);
+        } finally {
+            setSavingTests(false);
+        }
+    };
+
+    // ── Section toggle pill ──────────────────────────────────────────────────
     const SectionPill = ({ id, label, count, alertCount }) => (
         <button
             onClick={() => setActiveSection(id)}
             style={{
-                padding: '10px 20px',
-                borderRadius: '8px',
+                padding: '8px 16px', borderRadius: '8px',
                 border: `2px solid ${activeSection === id ? '#667eea' : '#e5e7eb'}`,
                 background: activeSection === id ? '#667eea' : 'white',
                 color: activeSection === id ? 'white' : '#374151',
-                fontWeight: '700',
-                fontSize: '14px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                position: 'relative',
+                fontWeight: '700', fontSize: '13px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: '6px', position: 'relative',
             }}
         >
             {label}
             {count !== undefined && (
                 <span style={{
-                    padding: '2px 8px',
-                    borderRadius: '12px',
+                    padding: '1px 7px', borderRadius: '12px',
                     background: activeSection === id ? 'rgba(255,255,255,0.25)' : '#f3f4f6',
                     color: activeSection === id ? 'white' : '#6b7280',
-                    fontSize: '12px',
-                    fontWeight: '700',
+                    fontSize: '11px', fontWeight: '700',
                 }}>
                     {count}
                 </span>
             )}
             {alertCount > 0 && (
                 <span style={{
-                    position: 'absolute',
-                    top: '-6px',
-                    right: '-6px',
-                    width: '18px',
-                    height: '18px',
-                    borderRadius: '50%',
-                    background: '#ef4444',
-                    color: 'white',
-                    fontSize: '10px',
-                    fontWeight: '900',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    position: 'absolute', top: '-6px', right: '-6px',
+                    width: '16px', height: '16px', borderRadius: '50%',
+                    background: '#ef4444', color: 'white',
+                    fontSize: '9px', fontWeight: '900',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
                 }}>
                     {alertCount}
                 </span>
@@ -207,12 +300,274 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         </button>
     );
 
+    // ── Compact group card ───────────────────────────────────────────────────
+    const GroupCard = ({ group }) => {
+        const sb = getStatusBadge(group.status);
+        const pb = getPaymentBadge(group.paymentStatus);
+        const aptDate = parseDate(group.appointmentDate);
+        const isPast = aptDate && aptDate < new Date();
+        const isSchd = (group.status || '').toUpperCase() === 'SCHEDULED';
+        const isPending = (group.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION';
+        const isGroupLoading = group.appointments.some(a =>
+            actionLoading === a.id + '-pay' ||
+            actionLoading === a.id + '-status' ||
+            actionLoading === a.id + '-miss'
+        );
+
+        return (
+            <div style={{
+                background: 'white',
+                border: `1.5px solid ${isPending ? '#fbbf24' : '#e5e7eb'}`,
+                borderRadius: '10px', padding: '12px 14px', marginBottom: '10px',
+                boxShadow: isPending ? '0 2px 8px rgba(251,191,36,0.15)' : '0 1px 3px rgba(0,0,0,0.05)',
+            }}>
+                {/* Row 1: avatar + name + date + badges */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                    <div style={{
+                        width: '34px', height: '34px', borderRadius: '50%', flexShrink: 0,
+                        background: 'linear-gradient(135deg, #667eea, #764ba2)',
+                        color: 'white', display: 'flex', alignItems: 'center',
+                        justifyContent: 'center', fontWeight: '700', fontSize: '12px',
+                    }}>
+                        {group.patientName
+                            ? group.patientName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
+                            : 'U'}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: '700', fontSize: '14px', color: '#111827' }}>
+                            {group.patientName || 'Unknown Patient'}
+                            <span style={{ fontWeight: '400', color: '#9ca3af', fontSize: '11px', marginLeft: '6px' }}>
+                                ID: {group.patientId || 'N/A'}
+                            </span>
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '1px' }}>
+                            📅 {fmtDate(group.appointmentDate)}
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: 'flex-end', flexShrink: 0 }}>
+                        <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: '700', background: sb.bg, color: sb.color, whiteSpace: 'nowrap' }}>
+                            {group.status || 'Unknown'}
+                        </span>
+                        <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: '600', background: pb.bg, color: pb.color, whiteSpace: 'nowrap' }}>
+                            {pb.icon} {pb.label}
+                        </span>
+                    </div>
+                </div>
+
+                {/* Row 2: tests breakdown */}
+                <div style={{
+                    background: '#f9fafb', border: '1px solid #e5e7eb',
+                    borderRadius: '7px', padding: '8px 10px', marginBottom: '8px',
+                }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                        <span style={{ fontSize: '10px', fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                            {group.appointments.length} Test{group.appointments.length > 1 ? 's' : ''}
+                        </span>
+                        <button
+                            onClick={() => openEditTests(group)}
+                            style={{
+                                fontSize: '10px', fontWeight: '700', color: '#667eea',
+                                background: '#ede9fe', border: 'none', borderRadius: '5px',
+                                padding: '2px 8px', cursor: 'pointer',
+                            }}
+                        >
+                            ✏️ Edit Tests
+                        </button>
+                    </div>
+
+                    {group.appointments.map((apt, i) => (
+                        <div key={apt.id} style={{
+                            display: 'flex', justifyContent: 'space-between',
+                            fontSize: '12px', paddingTop: i > 0 ? '4px' : '0',
+                            borderTop: i > 0 ? '1px solid #e5e7eb' : 'none',
+                            marginTop: i > 0 ? '4px' : '0',
+                        }}>
+                            <span style={{ color: '#374151', fontWeight: '500' }}>
+                                🧪 {apt.testType || apt.reason || 'Medical Test'}
+                            </span>
+                            <span style={{ color: '#059669', fontWeight: '700', flexShrink: 0, marginLeft: '8px' }}>
+                                {apt.price || '—'}
+                            </span>
+                        </div>
+                    ))}
+
+                    {group.appointments.length > 1 && (
+                        <div style={{
+                            display: 'flex', justifyContent: 'space-between',
+                            fontSize: '12px', fontWeight: '800', color: '#111827',
+                            borderTop: '2px solid #d1d5db', marginTop: '6px', paddingTop: '6px',
+                        }}>
+                            <span>Total</span>
+                            <span style={{ color: '#059669' }}>{formatNaira(group.totalPrice)}</span>
+                        </div>
+                    )}
+                </div>
+
+                {/* Row 3: pending payment notice + approve */}
+                {isPending && (
+                    <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        background: '#fef3c7', border: '1px solid #fbbf24',
+                        borderRadius: '7px', padding: '7px 10px', marginBottom: '8px',
+                    }}>
+                        <div style={{ fontSize: '11px', color: '#92400e', fontWeight: '600' }}>
+                            📲 Patient clicked "I Have Paid" — verify Sterling Bank (0089364407) and approve
+                        </div>
+                        <button
+                            onClick={() => handleApprovePayment(group)}
+                            disabled={isGroupLoading}
+                            style={{
+                                padding: '4px 12px', background: '#059669', color: 'white',
+                                border: 'none', borderRadius: '6px', cursor: 'pointer',
+                                fontWeight: '700', fontSize: '11px', marginLeft: '10px', whiteSpace: 'nowrap',
+                                opacity: isGroupLoading ? 0.6 : 1,
+                            }}
+                        >
+                            {isGroupLoading ? '...' : '✅ Approve'}
+                        </button>
+                    </div>
+                )}
+
+                {/* Row 4: action buttons (only for scheduled) */}
+                {isSchd && (
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <button
+                            onClick={() => handleGroupStatus(group, 'COMPLETED')}
+                            disabled={!!actionLoading}
+                            style={{ padding: '4px 12px', background: '#1e40af', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}
+                        >
+                            ✓ Mark Done
+                        </button>
+                        {isPast && (
+                            <button
+                                onClick={() => {
+                                    if (window.confirm('Mark all appointments in this group as missed?')) {
+                                        group.appointments.forEach(a => handleMarkMissed(a.id));
+                                    }
+                                }}
+                                disabled={!!actionLoading}
+                                style={{ padding: '4px 12px', background: '#ea580c', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}
+                            >
+                                ⚠ Missed
+                            </button>
+                        )}
+                        <button
+                            onClick={() => {
+                                if (window.confirm('Cancel all appointments in this group?')) {
+                                    handleGroupStatus(group, 'CANCELLED');
+                                }
+                            }}
+                            disabled={!!actionLoading}
+                            style={{ padding: '4px 12px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}
+                        >
+                            ✕ Cancel
+                        </button>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     // ════════════════════════════════════════════════════════════════════════
     return (
         <div style={{ padding: '0' }}>
 
-            {/* ── Section toggle ── */}
-            <div style={{ display: 'flex', gap: '12px', padding: '20px 20px 0', flexWrap: 'wrap' }}>
+            {/* ── Edit Tests Modal ─────────────────────────────────────────── */}
+            {editingGroup && (
+                <div style={{
+                    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+                    zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
+                }}>
+                    <div style={{
+                        background: 'white', borderRadius: '14px', padding: '22px',
+                        width: '100%', maxWidth: '460px', maxHeight: '85vh', overflowY: 'auto',
+                        boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+                    }}>
+                        <div style={{ fontSize: '16px', fontWeight: '800', color: '#111827', marginBottom: '3px' }}>
+                            ✏️ Edit Tests
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '16px' }}>
+                            {editingGroup.patientName} · {fmtDate(editingGroup.appointmentDate)}
+                        </div>
+
+                        {editTests.map((t, i) => (
+                            <div key={t.id} style={{
+                                background: '#f9fafb', border: '1px solid #e5e7eb',
+                                borderRadius: '8px', padding: '12px', marginBottom: '10px',
+                            }}>
+                                <div style={{ fontSize: '10px', fontWeight: '700', color: '#6b7280', marginBottom: '8px', textTransform: 'uppercase' }}>
+                                    Test {i + 1}
+                                </div>
+                                <div style={{ marginBottom: '8px' }}>
+                                    <label style={{ fontSize: '11px', color: '#374151', fontWeight: '600', display: 'block', marginBottom: '3px' }}>
+                                        Test Name
+                                    </label>
+                                    <input
+                                        value={t.testType}
+                                        onChange={e => {
+                                            const u = [...editTests];
+                                            u[i] = { ...u[i], testType: e.target.value };
+                                            setEditTests(u);
+                                        }}
+                                        style={{
+                                            width: '100%', padding: '7px 10px', borderRadius: '6px',
+                                            border: '1.5px solid #d1d5db', fontSize: '13px',
+                                            boxSizing: 'border-box', outline: 'none',
+                                        }}
+                                    />
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '11px', color: '#374151', fontWeight: '600', display: 'block', marginBottom: '3px' }}>
+                                        Price
+                                    </label>
+                                    <input
+                                        value={t.price}
+                                        onChange={e => {
+                                            const u = [...editTests];
+                                            u[i] = { ...u[i], price: e.target.value };
+                                            setEditTests(u);
+                                        }}
+                                        style={{
+                                            width: '100%', padding: '7px 10px', borderRadius: '6px',
+                                            border: '1.5px solid #d1d5db', fontSize: '13px',
+                                            boxSizing: 'border-box', outline: 'none',
+                                        }}
+                                    />
+                                </div>
+                            </div>
+                        ))}
+
+                        <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
+                            <button
+                                onClick={() => { setEditingGroup(null); setEditTests([]); }}
+                                style={{
+                                    flex: 1, padding: '10px', background: '#f3f4f6',
+                                    color: '#374151', border: '1.5px solid #e5e7eb',
+                                    borderRadius: '8px', cursor: 'pointer', fontWeight: '700', fontSize: '13px',
+                                }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={saveEditedTests}
+                                disabled={savingTests}
+                                style={{
+                                    flex: 2, padding: '10px',
+                                    background: savingTests ? '#9ca3af' : '#667eea',
+                                    color: 'white', border: 'none', borderRadius: '8px',
+                                    cursor: savingTests ? 'not-allowed' : 'pointer',
+                                    fontWeight: '700', fontSize: '13px',
+                                }}
+                            >
+                                {savingTests ? 'Saving...' : '💾 Save Changes'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Section toggle pills ────────────────────────────────────── */}
+            <div style={{ display: 'flex', gap: '10px', padding: '16px 16px 0', flexWrap: 'wrap' }}>
                 <SectionPill
                     id="pending-payments"
                     label="💳 Pending Payments"
@@ -231,38 +586,27 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 SECTION 1 — PENDING PAYMENTS
             ════════════════════════════════════════════════════ */}
             {activeSection === 'pending-payments' && (
-                <div style={{ padding: '20px' }}>
-
+                <div style={{ padding: '14px 16px' }}>
                     {/* Header */}
                     <div style={{
-                        background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-                        border: '2px solid #fbbf24',
-                        borderRadius: '14px',
-                        padding: '20px 24px',
-                        marginBottom: '20px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '16px',
+                        background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
+                        border: '2px solid #fbbf24', borderRadius: '12px',
+                        padding: '12px 16px', marginBottom: '14px',
+                        display: 'flex', alignItems: 'center', gap: '12px',
                     }}>
-                        <div style={{ fontSize: '36px' }}>⏳</div>
-                        <div>
-                            <div style={{ fontSize: '20px', fontWeight: '800', color: '#92400e' }}>
+                        <div style={{ fontSize: '26px' }}>⏳</div>
+                        <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: '15px', fontWeight: '800', color: '#92400e' }}>
                                 Payment Approvals
                             </div>
-                            <div style={{ fontSize: '14px', color: '#b45309', marginTop: '2px' }}>
-                                These patients have transferred money to the Sterling Bank account and clicked "I Have Paid". Verify receipt and approve below.
+                            <div style={{ fontSize: '11px', color: '#b45309', marginTop: '2px' }}>
+                                Patients who transferred to Sterling Bank (0089364407) and tapped "I Have Paid". Verify and approve.
                             </div>
                         </div>
                         <div style={{
-                            marginLeft: 'auto',
-                            background: '#d97706',
-                            color: 'white',
-                            padding: '10px 20px',
-                            borderRadius: '10px',
-                            fontSize: '24px',
-                            fontWeight: '900',
-                            minWidth: '60px',
-                            textAlign: 'center',
+                            background: '#d97706', color: 'white',
+                            padding: '6px 14px', borderRadius: '8px',
+                            fontSize: '18px', fontWeight: '900', minWidth: '40px', textAlign: 'center',
                         }}>
                             {pendingPayments.length}
                         </div>
@@ -270,228 +614,20 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
 
                     {pendingPayments.length === 0 ? (
                         <div style={{
-                            textAlign: 'center',
-                            padding: '60px 20px',
-                            background: 'white',
-                            borderRadius: '14px',
-                            border: '2px dashed #e5e7eb',
+                            textAlign: 'center', padding: '40px 20px',
+                            background: 'white', borderRadius: '12px', border: '2px dashed #e5e7eb',
                         }}>
-                            <div style={{ fontSize: '56px', marginBottom: '12px' }}>✅</div>
-                            <div style={{ fontSize: '18px', fontWeight: '700', color: '#374151', marginBottom: '6px' }}>
+                            <div style={{ fontSize: '44px', marginBottom: '8px' }}>✅</div>
+                            <div style={{ fontSize: '15px', fontWeight: '700', color: '#374151', marginBottom: '4px' }}>
                                 All payments confirmed
                             </div>
-                            <div style={{ fontSize: '14px', color: '#9ca3af' }}>
+                            <div style={{ fontSize: '12px', color: '#9ca3af' }}>
                                 No pending bank transfers to review
                             </div>
                         </div>
-                    ) : pendingPayments.map(apt => {
-                        const dateVal = apt.appointmentDate || apt.scheduledDate || apt.date || apt.createdAt;
-                        const isLoading = actionLoading === apt.id + '-pay';
-
-                        return (
-                            <div key={apt.id} style={{
-                                background: 'white',
-                                border: '2px solid #fbbf24',
-                                borderRadius: '14px',
-                                marginBottom: '16px',
-                                overflow: 'hidden',
-                                boxShadow: '0 4px 12px rgba(251,191,36,0.15)',
-                            }}>
-                                {/* Card top bar */}
-                                <div style={{
-                                    background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
-                                    padding: '10px 20px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                }}>
-                                    <div style={{ fontWeight: '700', color: '#92400e', fontSize: '13px' }}>
-                                        ⏳ Patient submitted payment — awaiting your confirmation
-                                    </div>
-                                    <div style={{ fontSize: '12px', color: '#b45309', fontWeight: '600' }}>
-                                        #{apt.id}
-                                    </div>
-                                </div>
-
-                                {/* Card body */}
-                                <div style={{ padding: '20px', display: 'grid', gridTemplateColumns: '1fr auto', gap: '20px', alignItems: 'start' }}>
-
-                                    {/* Patient & test info */}
-                                    <div>
-                                        {/* Patient name */}
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-                                            <div style={{
-                                                width: '44px',
-                                                height: '44px',
-                                                borderRadius: '50%',
-                                                background: 'linear-gradient(135deg, #667eea, #764ba2)',
-                                                color: 'white',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                fontWeight: '700',
-                                                fontSize: '16px',
-                                                flexShrink: 0,
-                                            }}>
-                                                {apt.patientName ? apt.patientName.split(' ').map(n => n[0]).join('') : 'U'}
-                                            </div>
-                                            <div>
-                                                <div style={{ fontWeight: '700', fontSize: '17px', color: '#111827' }}>
-                                                    {apt.patientName || 'Unknown Patient'}
-                                                </div>
-                                                <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '2px' }}>
-                                                    Patient ID: {apt.patientId || 'N/A'}
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* Test details table */}
-                                        <div style={{
-                                            background: '#f9fafb',
-                                            border: '1px solid #e5e7eb',
-                                            borderRadius: '10px',
-                                            overflow: 'hidden',
-                                            marginBottom: '14px',
-                                        }}>
-                                            <div style={{ padding: '10px 14px', background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', fontSize: '12px', fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                                                Test Details
-                                            </div>
-                                            <div style={{ padding: '14px' }}>
-                                                <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 16px', fontSize: '14px' }}>
-                                                    <span style={{ color: '#6b7280', fontWeight: '600' }}>Test:</span>
-                                                    <span style={{ color: '#111827', fontWeight: '600' }}>{apt.testType || apt.reason || 'N/A'}</span>
-
-                                                    <span style={{ color: '#6b7280', fontWeight: '600' }}>Date:</span>
-                                                    <span style={{ color: '#374151' }}>{fmtDate(dateVal)}</span>
-
-                                                    <span style={{ color: '#6b7280', fontWeight: '600' }}>Status:</span>
-                                                    <span>
-                                                        <span style={{
-                                                            padding: '2px 10px',
-                                                            borderRadius: '12px',
-                                                            fontSize: '12px',
-                                                            fontWeight: '700',
-                                                            background: getStatusBadge(apt.status).bg,
-                                                            color: getStatusBadge(apt.status).color,
-                                                        }}>
-                                                            {apt.status || 'Unknown'}
-                                                        </span>
-                                                    </span>
-
-                                                    <span style={{ color: '#6b7280', fontWeight: '600' }}>Payment Method:</span>
-                                                    <span style={{ color: '#374151' }}>{apt.paymentMethod === 'PAY_NOW' ? '🏦 Bank Transfer (Sterling Bank)' : apt.paymentMethod || 'Bank Transfer'}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* Price highlight */}
-                                        <div style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '10px',
-                                            padding: '12px 16px',
-                                            background: 'linear-gradient(135deg, #ecfdf5, #d1fae5)',
-                                            border: '2px solid #6ee7b7',
-                                            borderRadius: '10px',
-                                        }}>
-                                            <span style={{ fontSize: '20px' }}>💰</span>
-                                            <div>
-                                                <div style={{ fontSize: '11px', color: '#065f46', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Amount Patient Claims to Have Paid</div>
-                                                <div style={{ fontSize: '22px', fontWeight: '900', color: '#065f46', marginTop: '2px' }}>
-                                                    {apt.price || 'Price not set'}
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* Bank account reminder */}
-                                        <div style={{
-                                            marginTop: '12px',
-                                            padding: '10px 14px',
-                                            background: '#f0f9ff',
-                                            border: '1px solid #bae6fd',
-                                            borderRadius: '8px',
-                                            fontSize: '12px',
-                                            color: '#0c4a6e',
-                                        }}>
-                                            <strong>Verify in your Sterling Bank app:</strong> Account 0089364407 · QUALITEST MEDICAL DIAGNOSTIC SERVICES
-                                        </div>
-                                    </div>
-
-                                    {/* Right column — Approve / Reject */}
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', minWidth: '180px' }}>
-                                        {/* Submitted badge */}
-                                        <div style={{
-                                            padding: '10px 14px',
-                                            background: '#fef3c7',
-                                            border: '2px solid #fbbf24',
-                                            borderRadius: '10px',
-                                            textAlign: 'center',
-                                        }}>
-                                            <div style={{ fontSize: '24px', marginBottom: '4px' }}>📲</div>
-                                            <div style={{ fontSize: '12px', fontWeight: '700', color: '#92400e' }}>Patient clicked</div>
-                                            <div style={{ fontSize: '14px', fontWeight: '900', color: '#78350f', marginTop: '2px' }}>"I Have Paid"</div>
-                                        </div>
-
-                                        {/* Approve button */}
-                                        <button
-                                            onClick={() => handleApprovePayment(apt.id)}
-                                            disabled={isLoading}
-                                            style={{
-                                                padding: '14px 18px',
-                                                background: isLoading ? '#9ca3af' : 'linear-gradient(135deg, #059669, #047857)',
-                                                color: 'white',
-                                                border: 'none',
-                                                borderRadius: '10px',
-                                                cursor: isLoading ? 'not-allowed' : 'pointer',
-                                                fontWeight: '800',
-                                                fontSize: '14px',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                gap: '8px',
-                                                boxShadow: isLoading ? 'none' : '0 4px 12px rgba(5,150,105,0.3)',
-                                                transition: 'all 0.2s',
-                                            }}
-                                            onMouseEnter={e => { if (!isLoading) e.currentTarget.style.transform = 'translateY(-2px)'; }}
-                                            onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
-                                        >
-                                            {isLoading ? (
-                                                <><span>⏳</span> Approving...</>
-                                            ) : (
-                                                <><span style={{ fontSize: '18px' }}>✅</span> Approve Payment</>
-                                            )}
-                                        </button>
-
-                                        {/* Reject / flag button */}
-                                        <button
-                                            onClick={() => {
-                                                const reason = window.prompt('Reason for rejection (optional):');
-                                                if (reason !== null) {
-                                                    window.showNotificationAlert && window.showNotificationAlert('Payment flagged — patient should be contacted');
-                                                }
-                                            }}
-                                            style={{
-                                                padding: '10px 18px',
-                                                background: 'white',
-                                                color: '#dc2626',
-                                                border: '2px solid #fca5a5',
-                                                borderRadius: '10px',
-                                                cursor: 'pointer',
-                                                fontWeight: '700',
-                                                fontSize: '13px',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                gap: '6px',
-                                            }}
-                                        >
-                                            <span>⚠️</span> Flag / Query
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        );
-                    })}
+                    ) : pendingPayments.map(group => (
+                        <GroupCard key={group.key} group={group} />
+                    ))}
                 </div>
             )}
 
@@ -499,10 +635,9 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 SECTION 2 — ALL APPOINTMENTS
             ════════════════════════════════════════════════════ */}
             {activeSection === 'all-appointments' && (
-                <div style={{ padding: '20px' }}>
-
+                <div style={{ padding: '14px 16px' }}>
                     {/* Status pills */}
-                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
                         {[
                             { key: 'all',       label: 'All',       count: counts.all,       color: '#6b7280' },
                             { key: 'scheduled', label: 'Scheduled', count: counts.scheduled, color: '#065f46' },
@@ -514,14 +649,11 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                                 key={st.key}
                                 onClick={() => setFilterStatus(st.key)}
                                 style={{
-                                    padding: '7px 16px',
-                                    borderRadius: '20px',
+                                    padding: '5px 12px', borderRadius: '20px',
                                     border: `2px solid ${filterStatus === st.key ? st.color : '#e5e7eb'}`,
                                     background: filterStatus === st.key ? st.color : 'white',
                                     color: filterStatus === st.key ? 'white' : st.color,
-                                    fontWeight: '700',
-                                    fontSize: '13px',
-                                    cursor: 'pointer',
+                                    fontWeight: '700', fontSize: '12px', cursor: 'pointer',
                                 }}
                             >
                                 {st.label} ({st.count})
@@ -529,21 +661,16 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                         ))}
                     </div>
 
-                    {/* Filter controls */}
-                    <div style={{ display: 'flex', gap: '12px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    {/* Filters */}
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
                         <div>
-                            <label style={{ display: 'block', fontSize: '12px', color: '#6b7280', marginBottom: '4px', fontWeight: '600' }}>Status</label>
-                            <select className="form-input" value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ width: '150px' }}>
-                                <option value="all">All Status</option>
-                                <option value="scheduled">Scheduled</option>
-                                <option value="completed">Completed</option>
-                                <option value="missed">Missed</option>
-                                <option value="cancelled">Cancelled</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style={{ display: 'block', fontSize: '12px', color: '#6b7280', marginBottom: '4px', fontWeight: '600' }}>Payment</label>
-                            <select className="form-input" value={filterPayment} onChange={e => setFilterPayment(e.target.value)} style={{ width: '180px' }}>
+                            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Payment</label>
+                            <select
+                                className="form-input"
+                                value={filterPayment}
+                                onChange={e => setFilterPayment(e.target.value)}
+                                style={{ width: '160px', fontSize: '12px', padding: '5px 8px' }}
+                            >
                                 <option value="all">All Payments</option>
                                 <option value="paid">Paid</option>
                                 <option value="pending_confirmation">Pending Confirmation</option>
@@ -552,126 +679,37 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                             </select>
                         </div>
                         <div>
-                            <label style={{ display: 'block', fontSize: '12px', color: '#6b7280', marginBottom: '4px', fontWeight: '600' }}>Date</label>
-                            <input type="date" className="form-input" value={filterDate} onChange={e => setFilterDate(e.target.value)} style={{ width: '160px' }} />
+                            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Date</label>
+                            <input
+                                type="date"
+                                className="form-input"
+                                value={filterDate}
+                                onChange={e => setFilterDate(e.target.value)}
+                                style={{ width: '150px', fontSize: '12px', padding: '5px 8px' }}
+                            />
                         </div>
                         {(filterStatus !== 'all' || filterPayment !== 'all' || filterDate) && (
-                            <button onClick={() => { setFilterStatus('all'); setFilterPayment('all'); setFilterDate(''); }}
-                                style={{ padding: '8px 14px', background: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>
+                            <button
+                                onClick={() => { setFilterStatus('all'); setFilterPayment('all'); setFilterDate(''); }}
+                                style={{ padding: '6px 12px', background: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}
+                            >
                                 Clear
                             </button>
                         )}
                     </div>
 
-                    <div style={{ padding: '7px 12px', background: '#f3f4f6', borderRadius: '6px', marginBottom: '16px', fontSize: '13px', color: '#6b7280' }}>
-                        📅 Sorted oldest first · Showing {filtered.length} of {appointments.length}
+                    <div style={{ padding: '5px 10px', background: '#f3f4f6', borderRadius: '6px', marginBottom: '12px', fontSize: '12px', color: '#6b7280' }}>
+                        📅 Sorted oldest first · {filteredGroups.length} group(s) · {filteredGroups.reduce((s, g) => s + g.appointments.length, 0)} appointment(s)
                     </div>
 
-                    {/* Appointment cards */}
-                    {filtered.length === 0 ? (
-                        <div style={{ textAlign: 'center', padding: '48px', color: '#9ca3af' }}>
-                            <div style={{ fontSize: '48px', marginBottom: '12px' }}>📅</div>
-                            <div style={{ fontSize: '16px', fontWeight: '600', color: '#374151' }}>No appointments found</div>
+                    {filteredGroups.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '40px', color: '#9ca3af' }}>
+                            <div style={{ fontSize: '40px', marginBottom: '10px' }}>📅</div>
+                            <div style={{ fontSize: '15px', fontWeight: '600', color: '#374151' }}>No appointments found</div>
                         </div>
-                    ) : filtered.map((apt, idx) => {
-                        const dateVal  = apt.appointmentDate || apt.scheduledDate || apt.date || apt.createdAt;
-                        const sb       = getStatusBadge(apt.status);
-                        const pb       = getPaymentBadge(apt.paymentStatus);
-                        const aptDate  = parseDate(dateVal);
-                        const isPast   = aptDate && aptDate < new Date();
-                        const isSchd   = (apt.status || '').toUpperCase() === 'SCHEDULED';
-                        const isPending = (apt.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION';
-
-                        return (
-                            <div key={apt.id} style={{
-                                background: 'white',
-                                border: `2px solid ${isPending ? '#fbbf24' : '#e5e7eb'}`,
-                                borderRadius: '12px',
-                                padding: '16px',
-                                marginBottom: '12px',
-                                position: 'relative',
-                                boxShadow: isPending ? '0 2px 8px rgba(251,191,36,0.2)' : '0 1px 3px rgba(0,0,0,0.06)',
-                            }}>
-                                {/* Index */}
-                                <div style={{ position: 'absolute', top: '8px', left: '8px', background: '#e5e7eb', color: '#6b7280', fontSize: '11px', padding: '2px 6px', borderRadius: '4px', fontWeight: '600' }}>
-                                    #{idx + 1}
-                                </div>
-
-                                <div style={{ display: 'flex', gap: '12px', paddingLeft: '32px' }}>
-                                    {/* Avatar */}
-                                    <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'linear-gradient(135deg, #667eea, #764ba2)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '700', fontSize: '14px', flexShrink: 0 }}>
-                                        {apt.patientName ? apt.patientName.split(' ').map(n => n[0]).join('') : 'U'}
-                                    </div>
-
-                                    {/* Info */}
-                                    <div style={{ flex: 1 }}>
-                                        <div style={{ fontWeight: '700', fontSize: '15px', color: '#111827', marginBottom: '3px' }}>
-                                            {apt.patientName || 'Unknown Patient'}
-                                        </div>
-                                        <div style={{ fontSize: '13px', color: '#6b7280', marginBottom: '2px' }}>
-                                            🧪 {apt.testType || apt.reason || 'Test'}
-                                        </div>
-                                        <div style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>
-                                            📅 {fmtDate(dateVal)}
-                                        </div>
-                                        {apt.price && (
-                                            <div style={{ fontSize: '13px', color: '#059669', fontWeight: '700', marginBottom: '4px' }}>
-                                                💰 {apt.price}
-                                            </div>
-                                        )}
-
-                                        {/* Pending payment inline notice */}
-                                        {isPending && (
-                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fef3c7', border: '1px solid #fbbf24', borderRadius: '8px', padding: '8px 12px', marginTop: '8px' }}>
-                                                <div style={{ fontSize: '12px', color: '#92400e', fontWeight: '600' }}>
-                                                    📲 Patient clicked "I Have Paid" — verify and approve
-                                                </div>
-                                                <button
-                                                    onClick={() => handleApprovePayment(apt.id)}
-                                                    disabled={actionLoading === apt.id + '-pay'}
-                                                    style={{ padding: '5px 12px', background: '#059669', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '700', fontSize: '12px', marginLeft: '10px', whiteSpace: 'nowrap' }}
-                                                >
-                                                    {actionLoading === apt.id + '-pay' ? '...' : '✅ Approve'}
-                                                </button>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    {/* Badges + actions */}
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end' }}>
-                                        <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: '700', background: sb.bg, color: sb.color }}>
-                                            {apt.status || 'Unknown'}
-                                        </span>
-                                        <span style={{ padding: '3px 9px', borderRadius: '12px', fontSize: '11px', fontWeight: '600', background: pb.bg, color: pb.color }}>
-                                            {pb.icon} {pb.label}
-                                        </span>
-
-                                        {/* Action buttons */}
-                                        <div style={{ display: 'flex', gap: '5px', marginTop: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                                            {isSchd && (
-                                                <button onClick={() => handleUpdateStatus(apt.id, 'COMPLETED')} disabled={!!actionLoading}
-                                                    style={{ padding: '4px 10px', background: '#1e40af', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>
-                                                    ✓ Done
-                                                </button>
-                                            )}
-                                            {isSchd && isPast && (
-                                                <button onClick={() => handleMarkMissed(apt.id)} disabled={!!actionLoading}
-                                                    style={{ padding: '4px 10px', background: '#ea580c', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>
-                                                    ⚠ Missed
-                                                </button>
-                                            )}
-                                            {isSchd && (
-                                                <button onClick={() => handleUpdateStatus(apt.id, 'CANCELLED')} disabled={!!actionLoading}
-                                                    style={{ padding: '4px 10px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>
-                                                    ✕
-                                                </button>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        );
-                    })}
+                    ) : filteredGroups.map(group => (
+                        <GroupCard key={group.key} group={group} />
+                    ))}
                 </div>
             )}
         </div>
