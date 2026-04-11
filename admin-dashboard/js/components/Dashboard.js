@@ -165,15 +165,10 @@ const MedicalAdminDashboard = () => {
                 (apt.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION'
             ).length;
 
-            const missedAppointments = appointments.filter(apt => {
-                const st = (apt.status || '').toUpperCase();
-                if (st === 'MISSED') return true;
-                if (st === 'SCHEDULED') {
-                    const d = parseDate(apt.appointmentDate || apt.scheduledDate || apt.date);
-                    return d && d < now;
-                }
-                return false;
-            }).length;
+           // CORRECT — only count what's explicitly marked MISSED in the DB
+const missedAppointments = appointments.filter(apt =>
+    (apt.status || '').toUpperCase() === 'MISSED'
+).length;
 
             setStats({
                 totalPatients: patients.length,
