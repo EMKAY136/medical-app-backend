@@ -10,16 +10,17 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     const [searchQuery, setSearchQuery] = useState('');
     const [unreadCount, setUnreadCount] = useState(0);
     const [supportStatus, setSupportStatus] = useState(null);
-    const [ticketNumber, setTicketNumber] = useState(null);
     const messagesEndRef = useRef(null);
     const messageInputRef = useRef(null);
     const activeConversationRef = useRef(null);
+    const lastMessageCountRef = useRef(0);
 
     const getHeaders = () => ({
         'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
         'Content-Type': 'application/json',
     });
 
+    // Keep ref in sync with state
     useEffect(() => {
         activeConversationRef.current = activeConversation;
     }, [activeConversation]);
@@ -48,41 +49,37 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     }, [selectedPatient]);
 
-    // ── Single stable polling interval ────────────────────────────────────────
+    // ── Polling — single stable interval ─────────────────────────────────────
     useEffect(() => {
         const interval = setInterval(() => {
             const conv = activeConversationRef.current;
-
             if (isAdmin) {
-                // Always refresh sidebar list
                 loadActiveChats(true);
-                // Refresh active chat if one is open
-                if (conv?.userId) {
-                    loadChatByUserId(conv.userId, true);
-                }
+                if (conv?.userId) loadAdminChatForUser(conv.userId, true);
             } else {
-                // Patient side: poll own chat history from patient server
                 if (conv) loadPatientChatHistory(true);
             }
-        }, 5000);
+        }, 4000);
         return () => clearInterval(interval);
     }, [isAdmin]);
 
     // ── Support status ────────────────────────────────────────────────────────
     const loadSupportStatus = async () => {
         try {
+            // Use patient API for status (publicly available)
             const response = await fetch(`${CONFIG.API_BASE_URL}/api/support/status`, {
-                headers: getHeaders()
+                headers: getHeaders(),
             });
             if (!response.ok) return;
             const data = await response.json();
             if (data.success) setSupportStatus(data);
-        } catch (error) {
-            console.error('Error loading support status:', error);
+        } catch (e) {
+            console.error('Error loading support status:', e);
         }
     };
 
-    // ── Admin: load all active chats from ADMIN server ────────────────────────
+    // ── Admin: load sidebar conversation list ─────────────────────────────────
+    // Reads from ADMIN server — lists all patients who sent messages
     const loadActiveChats = async (silent = false) => {
         if (!isAdmin) return;
         try {
@@ -92,7 +89,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                 { headers: getHeaders() }
             );
             if (!response.ok) {
-                console.error('Failed to load active chats:', response.status);
+                console.error('loadActiveChats failed:', response.status);
                 return;
             }
             const data = await response.json();
@@ -104,7 +101,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     patientEmail: chat.userEmail,
                     lastMessage: chat.lastMessage || chat.subject || 'New conversation',
                     lastMessageTime: new Date(chat.lastActivity || chat.createdAt),
-                    unreadCount: chat.status === 'NEEDS_RESPONSE' || chat.conversationType === 'NEEDS_FIRST_RESPONSE' ? 1 : 0,
+                    unreadCount: chat.status === 'NEEDS_RESPONSE' ? 1 : 0,
                     status: chat.status || 'active',
                     priority: chat.priority,
                     ticketNumber: chat.ticketNumber,
@@ -113,16 +110,16 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                 setConversations(mapped);
                 setUnreadCount(mapped.filter(c => c.unreadCount > 0).length);
             }
-        } catch (error) {
-            console.error('Error loading conversations:', error);
+        } catch (e) {
+            console.error('Error loading active chats:', e);
         } finally {
             if (!silent) setLoading(false);
         }
     };
 
-    // ── Admin: open chat for a specific patient ───────────────────────────────
+    // ── Admin: open a specific patient's chat ─────────────────────────────────
     const startConversationWithPatient = (patient) => {
-        const conversation = {
+        const conv = {
             id: `user_${patient.id}`,
             userId: patient.id,
             patientName: `${patient.firstName} ${patient.lastName}`,
@@ -130,62 +127,65 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             lastMessage: '',
             lastMessageTime: new Date(),
             unreadCount: 0,
-            status: 'new',
+            status: 'active',
         };
-        setActiveConversation(conversation);
-        activeConversationRef.current = conversation;
-        loadChatByUserId(patient.id, false);
+        setActiveConversation(conv);
+        activeConversationRef.current = conv;
+        loadAdminChatForUser(patient.id, false);
     };
 
-    // ── Admin: fetch messages for a patient from ADMIN server ─────────────────
-    const loadChatByUserId = async (userId, silent = false) => {
+    // ── Admin: fetch messages for a user ──────────────────────────────────────
+    // KEY FIX: reads from ADMIN server which proxies/stores patient messages
+    const loadAdminChatForUser = async (userId, silent = false) => {
         if (!userId) return;
         try {
             if (!silent) setLoading(true);
-            // ✅ ADMIN_API_URL — admin reads patient messages from admin server
             const response = await fetch(
                 `${CONFIG.ADMIN_API_URL}/api/support/admin/chat/${userId}`,
                 { headers: getHeaders() }
             );
             if (!response.ok) {
-                console.error('Failed to load chat for user', userId, response.status);
+                console.error('loadAdminChatForUser failed:', response.status, 'userId:', userId);
                 return;
             }
             const data = await response.json();
             if (data.success) {
                 const formatted = (data.messages || []).map(msg => ({
                     id: msg.id,
-                    senderId: (msg.senderType === 'SUPPORT_AGENT' || msg.senderType === 'admin' || msg.senderType === 'support_agent')
-                        ? currentUser?.id
-                        : userId,
+                    senderId: isAgentMessage(msg.senderType) ? 'admin' : userId,
                     senderName: msg.senderName,
                     senderType: msg.senderType,
                     message: msg.message,
                     timestamp: new Date(msg.timestamp || msg.createdAt),
                     status: msg.isRead ? 'read' : 'delivered',
                 }));
-                setMessages(formatted);
-
+                // Only update if message count changed (avoids flicker)
+                if (formatted.length !== lastMessageCountRef.current) {
+                    lastMessageCountRef.current = formatted.length;
+                    setMessages(formatted);
+                }
+                // Update patient details if provided
                 if (data.user) {
-                    setActiveConversation(prev => ({
+                    setActiveConversation(prev => prev ? ({
                         ...prev,
-                        patientName: data.user.name || `${data.user.firstName || ''} ${data.user.lastName || ''}`.trim(),
+                        patientName: data.user.name ||
+                            `${data.user.firstName || ''} ${data.user.lastName || ''}`.trim(),
                         patientEmail: data.user.email,
                         patientPhone: data.user.phone,
-                    }));
+                    }) : prev);
                 }
             }
-        } catch (error) {
-            console.error('Error loading chat by userId:', error);
+        } catch (e) {
+            console.error('Error in loadAdminChatForUser:', e);
         } finally {
             if (!silent) setLoading(false);
         }
     };
 
-    // ── Patient: set up own conversation ──────────────────────────────────────
+    // ── Patient: initialise own conversation ──────────────────────────────────
     const loadPatientConversation = async () => {
         try {
-            const conversation = {
+            const conv = {
                 id: 'patient_chat',
                 userId: currentUser?.id,
                 patientName: `${currentUser?.firstName || ''} ${currentUser?.lastName || ''}`.trim(),
@@ -193,62 +193,69 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                 adminName: 'Medical Support Team',
                 status: 'active',
             };
-            setActiveConversation(conversation);
-            activeConversationRef.current = conversation;
+            setActiveConversation(conv);
+            activeConversationRef.current = conv;
             loadPatientChatHistory(false);
-        } catch (error) {
-            console.error('Error loading patient conversation:', error);
+        } catch (e) {
+            console.error('Error loading patient conversation:', e);
         }
     };
 
-    // ── Patient: fetch own chat history from PATIENT server ───────────────────
+    // ── Patient: fetch own messages from patient server ───────────────────────
     const loadPatientChatHistory = async (silent = false) => {
         try {
             if (!silent) setLoading(true);
-            // ✅ API_BASE_URL — patient reads their own chat from patient server
             const response = await fetch(
                 `${CONFIG.API_BASE_URL}/api/support/chat/history`,
                 { headers: getHeaders() }
             );
             if (!response.ok) {
-                console.error('Failed to load patient chat history:', response.status);
+                console.error('loadPatientChatHistory failed:', response.status);
                 return;
             }
             const data = await response.json();
             if (data.success) {
                 const formatted = (data.messages || []).map(msg => ({
                     id: msg.id,
-                    senderId: (msg.senderType === 'SUPPORT_AGENT' || msg.senderType === 'admin' || msg.senderType === 'support_agent')
-                        ? 'admin'
-                        : currentUser?.id,
+                    senderId: isAgentMessage(msg.senderType) ? 'admin' : currentUser?.id,
                     senderName: msg.senderName,
                     senderType: msg.senderType,
                     message: msg.message,
                     timestamp: new Date(msg.timestamp || msg.createdAt),
                     status: msg.isRead ? 'read' : 'delivered',
                 }));
-                setMessages(formatted);
+                if (formatted.length !== lastMessageCountRef.current) {
+                    lastMessageCountRef.current = formatted.length;
+                    setMessages(formatted);
+                }
             }
-        } catch (error) {
-            console.error('Error loading patient chat history:', error);
+        } catch (e) {
+            console.error('Error loading patient chat history:', e);
         } finally {
             if (!silent) setLoading(false);
         }
+    };
+
+    // ── Helper: identify agent/admin message types ────────────────────────────
+    const isAgentMessage = (senderType) => {
+        const t = (senderType || '').toLowerCase();
+        return t === 'support_agent' || t === 'admin' || t === 'support_agent';
     };
 
     // ── Send message ──────────────────────────────────────────────────────────
     const sendMessage = async () => {
         if (!newMessage.trim() || sending) return;
 
-        setSending(true);
         const messageText = newMessage.trim();
         setNewMessage('');
+        setSending(true);
 
+        // Optimistic UI
         const tempMessage = {
             id: `temp_${Date.now()}`,
             senderId: currentUser?.id,
             senderName: isAdmin
-                ? 'Medical Support'
+                ? (currentUser?.name || 'Medical Support')
                 : `${currentUser?.firstName || ''} ${currentUser?.lastName || ''}`.trim(),
             senderType: isAdmin ? 'SUPPORT_AGENT' : 'USER',
             message: messageText,
@@ -261,45 +268,55 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             let response;
 
             if (isAdmin) {
+                // ── Admin reply: POST to ADMIN server ────────────────────────
                 const conv = activeConversationRef.current;
-                if (!conv?.userId) throw new Error('No active patient selected');
+                if (!conv?.userId) throw new Error('No patient selected');
 
-                // ✅ Admin sends reply via ADMIN server
-                response = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/reply`, {
-                    method: 'POST',
-                    headers: getHeaders(),
-                    body: JSON.stringify({
-                        userId: conv.userId,
-                        message: messageText,
-                        ticketId: conv.ticketId || null,
-                    }),
-                });
+                response = await fetch(
+                    `${CONFIG.ADMIN_API_URL}/api/support/admin/reply`,
+                    {
+                        method: 'POST',
+                        headers: getHeaders(),
+                        body: JSON.stringify({
+                            userId: conv.userId,
+                            message: messageText,
+                            ticketId: conv.ticketId || null,
+                            senderType: 'SUPPORT_AGENT',
+                        }),
+                    }
+                );
             } else {
-                // ✅ Patient sends message via PATIENT server
-                response = await fetch(`${CONFIG.API_BASE_URL}/api/support/chat/message`, {
-                    method: 'POST',
-                    headers: getHeaders(),
-                    body: JSON.stringify({ message: messageText }),
-                });
+                // ── Patient message: POST to patient server ───────────────────
+                response = await fetch(
+                    `${CONFIG.API_BASE_URL}/api/support/chat/message`,
+                    {
+                        method: 'POST',
+                        headers: getHeaders(),
+                        body: JSON.stringify({
+                            message: messageText,
+                            senderType: 'USER',
+                        }),
+                    }
+                );
             }
 
             if (response.status === 401) throw new Error('Session expired. Please login again.');
             if (!response.ok) {
                 const err = await response.json().catch(() => ({ message: response.statusText }));
-                throw new Error(err.message || 'Failed to send message');
+                throw new Error(err.message || `Server error ${response.status}`);
             }
 
             const data = await response.json();
 
             if (data.success) {
-                // Confirm temp message as delivered
+                // Confirm temp message
                 setMessages(prev => prev.map(msg =>
                     msg.id === tempMessage.id
                         ? { ...msg, status: 'delivered', id: data.messageId || msg.id }
                         : msg
                 ));
 
-                // Bot response for patient side
+                // Bot response for patient (only in non-human-agent mode)
                 if (!isAdmin && data.botResponse) {
                     setTimeout(() => {
                         setMessages(prev => [...prev, {
@@ -311,36 +328,31 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                             timestamp: new Date(),
                             status: 'delivered',
                         }]);
-                    }, 1000);
+                    }, 800);
                 }
 
-                // Update sidebar last message
+                // Immediately re-fetch to confirm delivery
                 const conv = activeConversationRef.current;
-                if (conv) {
-                    setConversations(prev => prev.map(c =>
-                        c.id === conv.id
-                            ? { ...c, lastMessage: messageText, lastMessageTime: new Date() }
-                            : c
-                    ));
-                }
-
-                // Immediately re-fetch to confirm message landed
-                if (isAdmin && conv?.userId) {
-                    loadChatByUserId(conv.userId, true);
-                } else if (!isAdmin) {
-                    loadPatientChatHistory(true);
-                }
+                setTimeout(() => {
+                    if (isAdmin && conv?.userId) {
+                        loadAdminChatForUser(conv.userId, true);
+                    } else if (!isAdmin) {
+                        loadPatientChatHistory(true);
+                    }
+                }, 500);
 
             } else {
                 throw new Error(data.message || 'Failed to send message');
             }
 
-        } catch (error) {
-            console.error('Error sending message:', error);
+        } catch (e) {
+            console.error('sendMessage error:', e);
+            // Remove failed temp message
             setMessages(prev => prev.filter(msg => msg.id !== tempMessage.id));
-            alert('Failed to send message: ' + error.message);
+            alert('Failed to send: ' + e.message);
         } finally {
             setSending(false);
+            messageInputRef.current?.focus();
         }
     };
 
@@ -351,27 +363,26 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     };
 
+    // ── Helpers ───────────────────────────────────────────────────────────────
     const formatMessageTime = (timestamp) => {
         const now = new Date();
-        const messageTime = new Date(timestamp);
-        const diffInHours = (now - messageTime) / (1000 * 60 * 60);
-        if (diffInHours < 1) return 'Just now';
-        if (diffInHours < 24) return messageTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        return messageTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
-    };
-
-    const getSenderTypeColor = (senderType) => {
-        const t = (senderType || '').toLowerCase();
-        if (t === 'support_agent' || t === 'admin') return '#3b82f6';
-        if (t === 'bot') return '#10b981';
-        if (t === 'system') return '#6b7280';
-        return '#3b82f6';
+        const t = new Date(timestamp);
+        const diffH = (now - t) / (1000 * 60 * 60);
+        if (diffH < 1) return 'Just now';
+        if (diffH < 24) return t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return t.toLocaleDateString([], { month: 'short', day: 'numeric' });
     };
 
     const isMyMessage = (message) => {
         const t = (message.senderType || '').toLowerCase();
         if (isAdmin) return t === 'support_agent' || t === 'admin';
         return t === 'user';
+    };
+
+    const getBubbleColor = (message) => {
+        const t = (message.senderType || '').toLowerCase();
+        if (t === 'bot') return '#10b981';
+        return '#3b82f6';
     };
 
     const filteredConversations = conversations.filter(conv =>
@@ -384,217 +395,178 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     return (
         <div className="modal" style={{ zIndex: 1000 }}>
             <div className="modal-content" style={{
-                maxWidth: isAdmin ? '1200px' : '700px',
+                maxWidth: isAdmin ? '1100px' : '680px',
                 height: '85vh',
                 display: 'flex',
-                flexDirection: isAdmin ? 'row' : 'column',
+                flexDirection: 'column',
                 overflow: 'hidden',
+                padding: 0,
             }}>
-                {/* Header */}
-                <div className="card-header" style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    position: isAdmin ? 'absolute' : 'relative',
-                    top: 0, left: 0, right: 0,
-                    zIndex: 10,
+
+                {/* ── Header ── */}
+                <div style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '14px 20px',
                     backgroundColor: 'white',
                     borderBottom: '1px solid #e5e7eb',
+                    flexShrink: 0,
                 }}>
-                    <div>
-                        <h2 className="card-title">
-                            {isAdmin ? 'Patient Support Chat' : 'Medical Support'}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>
+                            {isAdmin ? '💬 Patient Support Chat' : '🏥 Medical Support'}
                         </h2>
-                        {supportStatus && !isAdmin && (
-                            <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                                {supportStatus.isOnline ? (
-                                    <span style={{ color: '#10b981' }}>
-                                        <i className="fas fa-circle" style={{ fontSize: '8px', marginRight: '4px' }}></i>
-                                        Online — Response time: {supportStatus.estimatedResponseTime}
-                                    </span>
-                                ) : (
-                                    <span style={{ color: '#f59e0b' }}>
-                                        <i className="fas fa-circle" style={{ fontSize: '8px', marginRight: '4px' }}></i>
-                                        Offline — {supportStatus.supportHours}
-                                    </span>
-                                )}
-                            </div>
-                        )}
                         {isAdmin && unreadCount > 0 && (
                             <span style={{
                                 backgroundColor: '#ef4444', color: 'white',
-                                borderRadius: '12px', padding: '2px 8px',
-                                fontSize: '12px', marginLeft: '8px',
+                                borderRadius: '12px', padding: '2px 10px', fontSize: '12px', fontWeight: '700',
                             }}>
                                 {unreadCount} need response
                             </span>
                         )}
+                        {!isAdmin && supportStatus && (
+                            <span style={{ fontSize: '12px', color: supportStatus.isOnline ? '#10b981' : '#f59e0b' }}>
+                                ● {supportStatus.isOnline ? `Online · ${supportStatus.estimatedResponseTime || 'Fast replies'}` : 'Offline'}
+                            </span>
+                        )}
                     </div>
-                    <button className="btn btn-secondary" onClick={onClose}>
-                        <i className="fas fa-times"></i>
+                    <button
+                        onClick={onClose}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '20px', color: '#6b7280', padding: '4px 8px' }}
+                    >
+                        ✕
                     </button>
                 </div>
 
-                <div style={{
-                    display: 'flex', flex: 1,
-                    marginTop: isAdmin ? '70px' : '0',
-                    overflow: 'hidden',
-                }}>
-                    {/* ── Sidebar: Admin conversation list ── */}
+                {/* ── Body ── */}
+                <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+
+                    {/* ── Admin sidebar: conversation list ── */}
                     {isAdmin && (
                         <div style={{
-                            width: '320px',
+                            width: '280px', flexShrink: 0,
                             borderRight: '1px solid #e5e7eb',
-                            display: 'flex',
-                            flexDirection: 'column',
+                            display: 'flex', flexDirection: 'column',
                             backgroundColor: '#f9fafb',
                         }}>
-                            <div style={{ padding: '16px' }}>
+                            <div style={{ padding: '12px' }}>
                                 <input
                                     type="text"
                                     placeholder="Search patients..."
                                     value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    onChange={e => setSearchQuery(e.target.value)}
                                     style={{
                                         width: '100%', padding: '8px 12px',
-                                        border: '1px solid #d1d5db',
-                                        borderRadius: '6px', fontSize: '14px',
+                                        border: '1px solid #d1d5db', borderRadius: '6px',
+                                        fontSize: '13px', boxSizing: 'border-box',
                                     }}
                                 />
                             </div>
 
                             <div style={{ flex: 1, overflowY: 'auto' }}>
-                                {loading ? (
+                                {loading && conversations.length === 0 ? (
                                     <div style={{ padding: '20px', textAlign: 'center' }}>
                                         <div className="spinner"></div>
                                     </div>
                                 ) : filteredConversations.length === 0 ? (
-                                    <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280', fontSize: '13px' }}>
+                                    <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '13px' }}>
                                         No active conversations
                                     </div>
-                                ) : (
-                                    filteredConversations.map(conversation => (
-                                        <div
-                                            key={conversation.id}
-                                            onClick={() => {
-                                                setActiveConversation(conversation);
-                                                activeConversationRef.current = conversation;
-                                                loadChatByUserId(conversation.userId, false);
-                                            }}
-                                            style={{
-                                                padding: '12px 16px',
-                                                cursor: 'pointer',
-                                                borderBottom: '1px solid #e5e7eb',
-                                                backgroundColor: activeConversation?.id === conversation.id
-                                                    ? '#dbeafe' : 'transparent',
-                                                transition: 'background 0.15s',
-                                            }}
-                                            onMouseEnter={(e) => {
-                                                if (activeConversation?.id !== conversation.id)
-                                                    e.currentTarget.style.backgroundColor = '#f3f4f6';
-                                            }}
-                                            onMouseLeave={(e) => {
-                                                if (activeConversation?.id !== conversation.id)
-                                                    e.currentTarget.style.backgroundColor = 'transparent';
-                                            }}
-                                        >
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                                                <div style={{ flex: 1, minWidth: 0 }}>
-                                                    <div style={{ fontWeight: conversation.unreadCount > 0 ? '700' : '500', fontSize: '14px', marginBottom: '3px' }}>
-                                                        {conversation.patientName}
-                                                    </div>
-                                                    {conversation.ticketNumber && (
-                                                        <div style={{ fontSize: '11px', color: '#3b82f6', marginBottom: '2px', fontWeight: '600' }}>
-                                                            #{conversation.ticketNumber}
-                                                        </div>
-                                                    )}
-                                                    <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                        {conversation.lastMessage || 'New conversation'}
-                                                    </div>
-                                                    <div style={{ fontSize: '11px', color: '#9ca3af' }}>
-                                                        {formatMessageTime(conversation.lastMessageTime)}
-                                                    </div>
+                                ) : filteredConversations.map(conv => (
+                                    <div
+                                        key={conv.id}
+                                        onClick={() => {
+                                            lastMessageCountRef.current = 0;
+                                            setActiveConversation(conv);
+                                            activeConversationRef.current = conv;
+                                            loadAdminChatForUser(conv.userId, false);
+                                        }}
+                                        style={{
+                                            padding: '11px 14px', cursor: 'pointer',
+                                            borderBottom: '1px solid #e5e7eb',
+                                            backgroundColor: activeConversation?.id === conv.id ? '#dbeafe' : 'transparent',
+                                        }}
+                                        onMouseEnter={e => { if (activeConversation?.id !== conv.id) e.currentTarget.style.backgroundColor = '#f3f4f6'; }}
+                                        onMouseLeave={e => { if (activeConversation?.id !== conv.id) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                    >
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{ fontWeight: conv.unreadCount > 0 ? '700' : '600', fontSize: '13px', marginBottom: '2px' }}>
+                                                    {conv.patientName}
                                                 </div>
-                                                <div style={{ marginLeft: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
-                                                    {conversation.priority && conversation.priority !== 'NORMAL' && (
-                                                        <div style={{ fontSize: '10px', color: conversation.priority === 'HIGH' ? '#ef4444' : '#f59e0b', fontWeight: '700' }}>
-                                                            {conversation.priority}
-                                                        </div>
-                                                    )}
-                                                    {conversation.unreadCount > 0 && (
-                                                        <div style={{
-                                                            backgroundColor: '#ef4444', color: 'white',
-                                                            borderRadius: '10px', width: '18px', height: '18px',
-                                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                            fontSize: '10px', fontWeight: '700',
-                                                        }}>!</div>
-                                                    )}
-                                                    <div style={{
-                                                        width: '8px', height: '8px', borderRadius: '50%',
-                                                        backgroundColor:
-                                                            conversation.status === 'active' ? '#10b981' :
-                                                            conversation.status === 'NEEDS_RESPONSE' ? '#ef4444' :
-                                                            conversation.status === 'waiting' ? '#f59e0b' :
-                                                            conversation.status === 'resolved' ? '#6b7280' : '#3b82f6',
-                                                    }}></div>
+                                                {conv.ticketNumber && (
+                                                    <div style={{ fontSize: '10px', color: '#3b82f6', fontWeight: '700', marginBottom: '2px' }}>
+                                                        #{conv.ticketNumber}
+                                                    </div>
+                                                )}
+                                                <div style={{ fontSize: '11px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {conv.lastMessage || 'New conversation'}
+                                                </div>
+                                                <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '2px' }}>
+                                                    {formatMessageTime(conv.lastMessageTime)}
                                                 </div>
                                             </div>
+                                            <div style={{ marginLeft: '6px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
+                                                {conv.unreadCount > 0 && (
+                                                    <div style={{
+                                                        backgroundColor: '#ef4444', color: 'white',
+                                                        borderRadius: '10px', width: '16px', height: '16px',
+                                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                        fontSize: '9px', fontWeight: '700',
+                                                    }}>!</div>
+                                                )}
+                                                <div style={{
+                                                    width: '7px', height: '7px', borderRadius: '50%',
+                                                    backgroundColor:
+                                                        conv.status === 'active' ? '#10b981' :
+                                                        conv.status === 'NEEDS_RESPONSE' ? '#ef4444' :
+                                                        conv.status === 'resolved' ? '#6b7280' : '#3b82f6',
+                                                }} />
+                                            </div>
                                         </div>
-                                    ))
-                                )}
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     )}
 
                     {/* ── Chat area ── */}
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
                         {activeConversation ? (
                             <>
-                                {/* Chat header */}
+                                {/* Chat sub-header */}
                                 <div style={{
-                                    padding: '12px 16px',
-                                    borderBottom: '1px solid #e5e7eb',
-                                    backgroundColor: 'white',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
+                                    padding: '10px 16px', borderBottom: '1px solid #e5e7eb',
+                                    backgroundColor: 'white', flexShrink: 0,
+                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                                 }}>
                                     <div>
-                                        <div style={{ fontWeight: '600', fontSize: '15px' }}>
+                                        <div style={{ fontWeight: '600', fontSize: '14px' }}>
                                             {isAdmin ? activeConversation.patientName : 'Medical Support Team'}
                                         </div>
-                                        <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                                            {isAdmin ? (
-                                                <>
-                                                    {activeConversation.patientEmail}
-                                                    {activeConversation.patientPhone && ` • ${activeConversation.patientPhone}`}
-                                                </>
-                                            ) : 'Qualitest Medical Support'}
+                                        <div style={{ fontSize: '11px', color: '#6b7280' }}>
+                                            {isAdmin
+                                                ? `${activeConversation.patientEmail || ''}${activeConversation.patientPhone ? ' · ' + activeConversation.patientPhone : ''}`
+                                                : 'Qualitest Medical · info@qualitestmedical.com'}
                                         </div>
-                                        {ticketNumber && (
-                                            <div style={{ fontSize: '11px', color: '#3b82f6', fontWeight: '600' }}>
-                                                Ticket #{ticketNumber}
-                                            </div>
-                                        )}
                                     </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        {isAdmin && (
-                                            <button
-                                                onClick={() => loadChatByUserId(activeConversation.userId, false)}
-                                                style={{ padding: '6px 10px', fontSize: '12px', background: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: '6px', cursor: 'pointer' }}
-                                                title="Refresh messages"
-                                            >
-                                                <i className="fas fa-sync-alt"></i>
-                                            </button>
-                                        )}
-                                        <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#10b981' }}></div>
-                                    </div>
+                                    {isAdmin && (
+                                        <button
+                                            onClick={() => {
+                                                lastMessageCountRef.current = 0;
+                                                loadAdminChatForUser(activeConversation.userId, false);
+                                            }}
+                                            title="Refresh messages"
+                                            style={{ padding: '5px 10px', fontSize: '12px', background: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: '6px', cursor: 'pointer' }}
+                                        >
+                                            🔄 Refresh
+                                        </button>
+                                    )}
                                 </div>
 
-                                {/* Messages */}
+                                {/* Messages area */}
                                 <div style={{ flex: 1, overflowY: 'auto', padding: '16px', backgroundColor: '#f9fafb' }}>
                                     {messages.length === 0 && (
-                                        <div style={{ textAlign: 'center', color: '#9ca3af', marginTop: '40px', fontSize: '14px' }}>
+                                        <div style={{ textAlign: 'center', color: '#9ca3af', marginTop: '40px', fontSize: '13px' }}>
                                             {isAdmin ? 'No messages yet from this patient.' : 'No messages yet. Start the conversation!'}
                                         </div>
                                     )}
@@ -604,32 +576,32 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                                             <div key={message.id} style={{
                                                 display: 'flex',
                                                 justifyContent: mine ? 'flex-end' : 'flex-start',
-                                                marginBottom: '12px',
+                                                marginBottom: '10px',
                                             }}>
                                                 <div style={{
-                                                    maxWidth: '75%',
-                                                    padding: '12px 16px',
-                                                    borderRadius: '18px',
-                                                    backgroundColor: mine ? getSenderTypeColor(message.senderType) : 'white',
+                                                    maxWidth: '75%', padding: '10px 14px',
+                                                    borderRadius: '16px',
+                                                    backgroundColor: mine ? getBubbleColor(message) : 'white',
                                                     color: mine ? 'white' : '#1f2937',
                                                     boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
+                                                    borderBottomRightRadius: mine ? '4px' : '16px',
+                                                    borderBottomLeftRadius: mine ? '16px' : '4px',
                                                 }}>
                                                     {!mine && message.senderName && (
-                                                        <div style={{ fontSize: '11px', fontWeight: '600', marginBottom: '4px', opacity: 0.75 }}>
+                                                        <div style={{ fontSize: '10px', fontWeight: '700', marginBottom: '3px', opacity: 0.7 }}>
                                                             {message.senderName}
                                                         </div>
                                                     )}
-                                                    <div style={{ marginBottom: '4px', whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>
+                                                    <div style={{ fontSize: '13px', lineHeight: '1.45', whiteSpace: 'pre-wrap' }}>
                                                         {message.message}
                                                     </div>
-                                                    <div style={{ fontSize: '11px', opacity: 0.65, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                                                    <div style={{ fontSize: '10px', opacity: 0.6, marginTop: '4px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '3px' }}>
                                                         {formatMessageTime(message.timestamp)}
                                                         {mine && (
-                                                            <i className={`fas ${
-                                                                message.status === 'sending' ? 'fa-clock' :
-                                                                message.status === 'read' ? 'fa-check-double' :
-                                                                'fa-check'
-                                                            }`} style={{ fontSize: '10px' }}></i>
+                                                            <span>{
+                                                                message.status === 'sending' ? '🕐' :
+                                                                message.status === 'read'     ? '✓✓' : '✓'
+                                                            }</span>
                                                         )}
                                                     </div>
                                                 </div>
@@ -639,64 +611,62 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                                     <div ref={messagesEndRef} />
                                 </div>
 
-                                {/* Input */}
-                                <div style={{ padding: '16px', borderTop: '1px solid #e5e7eb', backgroundColor: 'white' }}>
+                                {/* Input bar */}
+                                <div style={{ padding: '12px 16px', borderTop: '1px solid #e5e7eb', backgroundColor: 'white', flexShrink: 0 }}>
                                     <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
                                         <textarea
                                             ref={messageInputRef}
                                             value={newMessage}
-                                            onChange={(e) => setNewMessage(e.target.value)}
+                                            onChange={e => setNewMessage(e.target.value)}
                                             onKeyPress={handleKeyPress}
-                                            placeholder={isAdmin ? 'Type your reply to the patient...' : 'Type your message...'}
+                                            placeholder={isAdmin
+                                                ? 'Type your reply to the patient... (Enter to send)'
+                                                : 'Type your message... (Enter to send)'}
                                             rows={1}
                                             style={{
-                                                flex: 1, padding: '12px',
+                                                flex: 1, padding: '10px 14px',
                                                 border: '1px solid #d1d5db',
-                                                borderRadius: '24px', resize: 'none',
-                                                fontSize: '14px', minHeight: '48px', maxHeight: '120px',
-                                                fontFamily: 'inherit',
+                                                borderRadius: '20px', resize: 'none',
+                                                fontSize: '13px', minHeight: '42px', maxHeight: '110px',
+                                                fontFamily: 'inherit', outline: 'none',
+                                                boxSizing: 'border-box',
                                             }}
                                         />
                                         <button
                                             onClick={sendMessage}
                                             disabled={!newMessage.trim() || sending}
                                             style={{
-                                                padding: '12px 16px',
+                                                padding: '0 16px',
+                                                height: '42px',
                                                 backgroundColor: newMessage.trim() && !sending ? '#3b82f6' : '#d1d5db',
-                                                color: 'white', border: 'none',
-                                                borderRadius: '24px',
+                                                color: 'white', border: 'none', borderRadius: '20px',
                                                 cursor: newMessage.trim() && !sending ? 'pointer' : 'not-allowed',
-                                                minWidth: '48px', height: '48px',
                                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                gap: '6px', fontSize: '13px', fontWeight: '600', whiteSpace: 'nowrap',
+                                                transition: 'background 0.15s',
                                             }}
                                         >
-                                            {sending
-                                                ? <div className="spinner" style={{ width: '16px', height: '16px' }}></div>
-                                                : <i className="fas fa-paper-plane"></i>
-                                            }
+                                            {sending ? (
+                                                <div className="spinner" style={{ width: '14px', height: '14px' }}></div>
+                                            ) : (
+                                                <>Send <i className="fas fa-paper-plane" style={{ fontSize: '12px' }}></i></>
+                                            )}
                                         </button>
                                     </div>
-                                    {isAdmin && (
-                                        <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '6px', paddingLeft: '12px' }}>
-                                            Press Enter to send · Shift+Enter for new line
-                                        </div>
-                                    )}
                                 </div>
                             </>
                         ) : (
-                            <div style={{
-                                flex: 1, display: 'flex', alignItems: 'center',
-                                justifyContent: 'center', flexDirection: 'column', color: '#6b7280',
-                            }}>
-                                <i className="fas fa-comments" style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.4 }}></i>
+                            /* No conversation selected */
+                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#9ca3af' }}>
+                                <div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.3 }}>💬</div>
                                 {isAdmin ? (
                                     <div style={{ textAlign: 'center' }}>
-                                        <p style={{ fontWeight: '500', marginBottom: '4px' }}>Select a patient to start chatting</p>
-                                        <small>Conversations needing a response are highlighted</small>
+                                        <p style={{ fontWeight: '600', color: '#374151', marginBottom: '4px' }}>Select a patient to start chatting</p>
+                                        <small>Patients who sent messages appear in the sidebar</small>
                                     </div>
                                 ) : (
                                     <div style={{ textAlign: 'center' }}>
-                                        <p>Connecting to medical support...</p>
+                                        <p style={{ color: '#374151' }}>Connecting to medical support...</p>
                                         <small>Our team is here to help you</small>
                                     </div>
                                 )}
@@ -717,25 +687,10 @@ const SupportChatButton = ({ isAdmin, currentUser, patients = [] }) => {
     return (
         <>
             {isAdmin ? (
-                <div style={{ position: 'relative' }}>
-                    <button className="btn btn-primary" onClick={() => setShowChat(true)} style={{ marginRight: '8px' }}>
-                        <i className="fas fa-headset" style={{ marginRight: '8px' }}></i>
-                        Support Center
-                    </button>
-                    <div style={{ marginTop: '8px' }}>
-                        {patients.slice(0, 3).map(patient => (
-                            <button
-                                key={patient.id}
-                                className="btn btn-sm btn-secondary"
-                                onClick={() => { setSelectedPatient(patient); setShowChat(true); }}
-                                style={{ marginRight: '4px', marginBottom: '4px' }}
-                            >
-                                <i className="fas fa-comment" style={{ marginRight: '4px' }}></i>
-                                {patient.firstName}
-                            </button>
-                        ))}
-                    </div>
-                </div>
+                <button className="btn btn-primary" onClick={() => setShowChat(true)} style={{ marginRight: '8px' }}>
+                    <i className="fas fa-headset" style={{ marginRight: '8px' }}></i>
+                    Support Center
+                </button>
             ) : (
                 <button
                     className="btn btn-primary"

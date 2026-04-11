@@ -119,6 +119,8 @@ public class SupportService {
         return response;
     }
 
+
+
     // Send chat message (patient → admin)
     public Map<String, Object> sendChatMessage(String message, UserDetails userDetails) {
         Map<String, Object> response = new HashMap<>();
@@ -159,30 +161,41 @@ public class SupportService {
             }
 
             // Generate bot response
-            String botResponse = generateBotResponse(message.toLowerCase());
-            if (botResponse != null) {
-                ChatMessage botMessage = new ChatMessage();
-                botMessage.setUser(user);
-                botMessage.setSenderType(ChatMessage.SenderType.BOT);
-                botMessage.setMessage(botResponse);
-                botMessage.setSenderName("Medical Support Bot");
-                chatMessageRepository.save(botMessage);
-            }
+           // In sendChatMessage, replace the bot response block with this:
+String botResponse = null;
 
-            response.put("success", true);
-            response.put("message", "Message sent successfully");
-            response.put("messageId", savedMessage.getId());
-            response.put("botResponse", botResponse);
+// Only generate bot response if no agent has replied yet
+long agentMessageCount = chatMessageRepository
+    .countByUserAndSenderType(user, ChatMessage.SenderType.SUPPORT_AGENT);
 
-        } catch (Exception e) {
-            response.put("success", false);
-            response.put("message", "Error sending message: " + e.getMessage());
-        }
+if (agentMessageCount == 0) {
+    // No agent involved yet — safe to give bot response
+    botResponse = generateBotResponse(message.toLowerCase());
+    if (botResponse != null) {
+        ChatMessage botMessage = new ChatMessage();
+        botMessage.setUser(user);
+        botMessage.setSenderType(ChatMessage.SenderType.BOT);
+        botMessage.setMessage(botResponse);
+        botMessage.setSenderName("Medical Support Bot");
+        chatMessageRepository.save(botMessage);
+    }
+}
 
-        return response;
+        response.put("success", true);
+        response.put("message", "Message sent successfully");
+        response.put("messageId", savedMessage.getId());
+        response.put("botResponse", botResponse);
+        // null if agent is active — frontend ignores it
+
+    } catch (Exception e) {
+        response.put("success", false);
+        response.put("message", "Error sending message: " + e.getMessage());
     }
 
-    // Send agent reply to patient (admin → patient)
+    return response;
+}
+
+// Send agent reply to patient (admin → patient)
     public Map<String, Object> sendAgentReply(Map<String, Object> replyData, UserDetails agentDetails) {
         Map<String, Object> response = new HashMap<>();
         
@@ -285,6 +298,49 @@ public class SupportService {
 
         return response;
     }
+
+    // Add to SupportService.java
+public Map<String, Object> endChatSession(UserDetails userDetails) {
+    Map<String, Object> response = new HashMap<>();
+    try {
+        Optional<User> userOpt = userRepository.findByUsername(userDetails.getUsername());
+        if (userOpt.isEmpty()) {
+            response.put("success", false);
+            response.put("message", "User not found");
+            return response;
+        }
+
+        User user = userOpt.get();
+
+        // ── DO NOT delete messages — just add a system message marking session end ──
+        // Admin needs to be able to read the full history even after patient ends session
+        ChatMessage endMessage = new ChatMessage();
+        endMessage.setUser(user);
+        endMessage.setSenderType(ChatMessage.SenderType.SYSTEM);
+        endMessage.setMessage("Patient ended support session.");
+        endMessage.setSenderName("System");
+        chatMessageRepository.save(endMessage);
+
+        // Notify admin the session ended
+        try {
+            Map<String, Object> event = new HashMap<>();
+            event.put("event", "SESSION_ENDED");
+            event.put("userId", user.getId());
+            event.put("userName", user.getFirstName() + " " + user.getLastName());
+            event.put("timestamp", LocalDateTime.now().toString());
+            messagingTemplate.convertAndSend("/topic/admin/new-message", event);
+        } catch (Exception e) {
+            System.err.println("WebSocket session-end event failed: " + e.getMessage());
+        }
+
+        response.put("success", true);
+        response.put("message", "Session ended");
+    } catch (Exception e) {
+        response.put("success", false);
+        response.put("message", "Error ending session: " + e.getMessage());
+    }
+    return response;
+}
 
 
     public Map<String, Object> getAllChats(UserDetails agentDetails) {

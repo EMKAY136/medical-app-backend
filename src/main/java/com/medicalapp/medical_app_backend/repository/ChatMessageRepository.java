@@ -158,6 +158,7 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> 
     @Query("SELECT COUNT(m) FROM ChatMessage m WHERE m.user = :user AND m.isRead = false AND m.senderType = 'SYSTEM'")
     long countUnreadSystemMessages(@Param("user") User user);
 
+    long countByUserAndSenderType(User user, ChatMessage.SenderType senderType);
     // ========== BULK OPERATIONS ==========
     
     // Find messages by multiple users
