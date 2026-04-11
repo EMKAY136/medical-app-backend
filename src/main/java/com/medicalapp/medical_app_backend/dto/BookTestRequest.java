@@ -1,100 +1,92 @@
 package com.medicalapp.medical_app_backend.dto;
 
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Future;
-import jakarta.validation.constraints.Pattern;
-
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.time.LocalDateTime;
 
+/**
+ * Request body for booking a test — used by both:
+ *   - POST /api/admin/book-test-with-notification  (patient via mobile app)
+ *   - POST /api/admin/book-test                    (admin via admin panel)
+ */
 public class BookTestRequest {
-    
+
+    // ── Required ─────────────────────────────────────────────────────────────
+
     @NotNull(message = "Patient ID is required")
     private Long patientId;
-    
-    private String patientName;
-    
-    @NotBlank(message = "Test type is required")
+
+    @NotNull(message = "Test type is required")
     private String testType;
-    
-    @NotNull(message = "Scheduled date is required")
-    @Future(message = "Scheduled date must be in the future")
+
+    // ── Schedule ─────────────────────────────────────────────────────────────
+
+    /** Date portion — "2025-06-15" mapped to LocalDate */
     private LocalDate scheduledDate;
-    
-    @NotNull(message = "Scheduled time is required")
+
+    /** Time portion — "09:30" mapped to LocalTime */
     private LocalTime scheduledTime;
-    
+
+    // ── Optional metadata ────────────────────────────────────────────────────
+
     private String notes;
-    
-    @Pattern(regexp = "normal|urgent|emergency", message = "Priority must be normal, urgent, or emergency")
-    private String priority = "normal";
-    
-    // Additional fields for complete functionality
-    private String status;
-    private String doctorName;
-    private String department;
-    private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
-    
-    // Constructors
+    private String priority; // "normal" | "urgent" | "emergency"
+
+    // ── Payment fields (set by mobile booking flow) ──────────────────────────
+
+    /**
+     * Display price string copied directly from the services list.
+     * e.g. "₦7,000.00"
+     */
+    private String price;
+
+    /**
+     * Payment status at the time of booking:
+     *   UNPAID              – no payment option selected yet
+     *   PENDING_CONFIRMATION – patient transferred money and clicked "I Have Paid"
+     *   PAY_ON_ARRIVAL      – patient chose to pay when they arrive
+     *
+     * Maps to Appointment.PaymentStatus via the string overload on the entity.
+     */
+    private String paymentStatus;
+
+    /**
+     * How the patient intends to pay:
+     *   PAY_NOW      – bank transfer (Sterling Bank)
+     *   PAY_ON_ARRIVAL – cash/card on the day
+     */
+    private String paymentMethod;
+
+    // ── Constructors ──────────────────────────────────────────────────────────
+
     public BookTestRequest() {}
-    
-    public BookTestRequest(Long patientId, String testType, LocalDate scheduledDate, LocalTime scheduledTime) {
-        this.patientId = patientId;
-        this.testType = testType;
-        this.scheduledDate = scheduledDate;
-        this.scheduledTime = scheduledTime;
-    }
-    
-    // Getters and Setters
+
+    // ── Getters & Setters ─────────────────────────────────────────────────────
+
     public Long getPatientId() { return patientId; }
     public void setPatientId(Long patientId) { this.patientId = patientId; }
-    
-    public String getPatientName() { return patientName; }
-    public void setPatientName(String patientName) { this.patientName = patientName; }
-    
+
     public String getTestType() { return testType; }
     public void setTestType(String testType) { this.testType = testType; }
-    
+
     public LocalDate getScheduledDate() { return scheduledDate; }
     public void setScheduledDate(LocalDate scheduledDate) { this.scheduledDate = scheduledDate; }
-    
+
     public LocalTime getScheduledTime() { return scheduledTime; }
     public void setScheduledTime(LocalTime scheduledTime) { this.scheduledTime = scheduledTime; }
-    
-    public String getStatus() { return status; }
-    public void setStatus(String status) { this.status = status; }
-    
-    public String getPriority() { return priority; }
-    public void setPriority(String priority) { this.priority = priority; }
-    
+
     public String getNotes() { return notes; }
     public void setNotes(String notes) { this.notes = notes; }
-    
-    public String getDoctorName() { return doctorName; }
-    public void setDoctorName(String doctorName) { this.doctorName = doctorName; }
-    
-    public String getDepartment() { return department; }
-    public void setDepartment(String department) { this.department = department; }
-    
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
-    
-    public LocalDateTime getUpdatedAt() { return updatedAt; }
-    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
-    
-    // Utility method to combine date and time
-    public LocalDateTime getAppointmentDateTime() {
-        if (scheduledDate != null && scheduledTime != null) {
-            return scheduledDate.atTime(scheduledTime);
-        }
-        return null;
-    }
-    
-    // Utility method to get reason (maps to testType for your Appointment entity)
-    public String getReason() {
-        return this.testType;
-    }
+
+    public String getPriority() { return priority; }
+    public void setPriority(String priority) { this.priority = priority; }
+
+    public String getPrice() { return price; }
+    public void setPrice(String price) { this.price = price; }
+
+    public String getPaymentStatus() { return paymentStatus; }
+    public void setPaymentStatus(String paymentStatus) { this.paymentStatus = paymentStatus; }
+
+    public String getPaymentMethod() { return paymentMethod; }
+    public void setPaymentMethod(String paymentMethod) { this.paymentMethod = paymentMethod; }
 }

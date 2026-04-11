@@ -1,57 +1,107 @@
 package com.medicalapp.medical_app_backend.dto;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 
 public class AppointmentDto {
-    
+
     private Long id;
-    private Long patientId;
-    private String patientName;
+
+    // ── Date / time ──────────────────────────────────────────────────────────
     private LocalDateTime appointmentDate;
-    private String status;
+    private LocalDate     scheduledDate;     // "2025-06-15"
+    private LocalTime     scheduledTime;     // "09:30"
+
+    // ── Test / appointment info ──────────────────────────────────────────────
     private String reason;
+    private String testType;
     private String notes;
+    private String status;       // SCHEDULED | COMPLETED | MISSED | CANCELLED | NO_SHOW
+
+    // ── Patient ──────────────────────────────────────────────────────────────
+    private Long   patientId;
+    private String patientName;
+
+    // ── NEW: Payment fields ──────────────────────────────────────────────────
+    /** Display price string e.g. "₦7,000.00" */
+    private String price;
+
+    /**
+     * UNPAID | PENDING_CONFIRMATION | PAID | PAY_ON_ARRIVAL
+     * Defaults to UNPAID when not supplied.
+     */
+    private String paymentStatus;
+
+    /**
+     * PAY_NOW | PAY_ON_ARRIVAL
+     * PAY_NOW  = patient did a bank transfer and clicked "I Have Paid"
+     * PAY_ON_ARRIVAL = patient will pay when they arrive
+     */
+    private String paymentMethod;
+
+    /** Timestamp set when admin approves the payment */
+    private LocalDateTime paymentApprovedAt;
+
+    /** Username of the admin who approved the payment */
+    private String paymentApprovedBy;
+
+    // ── Audit ────────────────────────────────────────────────────────────────
     private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
-    
-    // Constructors
+
+    // ── Constructors ─────────────────────────────────────────────────────────
+
     public AppointmentDto() {}
-    
-    public AppointmentDto(Long id, Long patientId, String patientName, LocalDateTime appointmentDate, 
-                         String status, String reason) {
-        this.id = id;
-        this.patientId = patientId;
-        this.patientName = patientName;
-        this.appointmentDate = appointmentDate;
-        this.status = status;
-        this.reason = reason;
-    }
-    
-    // Getters and Setters
+
+    // ── Getters & Setters ─────────────────────────────────────────────────────
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
-    
-    public Long getPatientId() { return patientId; }
-    public void setPatientId(Long patientId) { this.patientId = patientId; }
-    
-    public String getPatientName() { return patientName; }
-    public void setPatientName(String patientName) { this.patientName = patientName; }
-    
+
     public LocalDateTime getAppointmentDate() { return appointmentDate; }
     public void setAppointmentDate(LocalDateTime appointmentDate) { this.appointmentDate = appointmentDate; }
-    
-    public String getStatus() { return status; }
-    public void setStatus(String status) { this.status = status; }
-    
+
+    public LocalDate getScheduledDate() { return scheduledDate; }
+    public void setScheduledDate(LocalDate scheduledDate) { this.scheduledDate = scheduledDate; }
+
+    public LocalTime getScheduledTime() { return scheduledTime; }
+    public void setScheduledTime(LocalTime scheduledTime) { this.scheduledTime = scheduledTime; }
+
     public String getReason() { return reason; }
     public void setReason(String reason) { this.reason = reason; }
-    
+
+    public String getTestType() { return testType; }
+    public void setTestType(String testType) { this.testType = testType; }
+
     public String getNotes() { return notes; }
     public void setNotes(String notes) { this.notes = notes; }
-    
+
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
+
+    public Long getPatientId() { return patientId; }
+    public void setPatientId(Long patientId) { this.patientId = patientId; }
+
+    public String getPatientName() { return patientName; }
+    public void setPatientName(String patientName) { this.patientName = patientName; }
+
+    // Payment
+
+    public String getPrice() { return price; }
+    public void setPrice(String price) { this.price = price; }
+
+    public String getPaymentStatus() { return paymentStatus; }
+    public void setPaymentStatus(String paymentStatus) { this.paymentStatus = paymentStatus; }
+
+    public String getPaymentMethod() { return paymentMethod; }
+    public void setPaymentMethod(String paymentMethod) { this.paymentMethod = paymentMethod; }
+
+    public LocalDateTime getPaymentApprovedAt() { return paymentApprovedAt; }
+    public void setPaymentApprovedAt(LocalDateTime paymentApprovedAt) { this.paymentApprovedAt = paymentApprovedAt; }
+
+    public String getPaymentApprovedBy() { return paymentApprovedBy; }
+    public void setPaymentApprovedBy(String paymentApprovedBy) { this.paymentApprovedBy = paymentApprovedBy; }
+
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
-    
-    public LocalDateTime getUpdatedAt() { return updatedAt; }
-    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 }

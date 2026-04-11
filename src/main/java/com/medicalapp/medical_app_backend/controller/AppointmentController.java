@@ -23,13 +23,55 @@ public class AppointmentController {
     @Autowired
     private AppointmentService appointmentService;
 
-    // Create new appointment
+    // ── NEW ──────────────────────────────────────────────────────────────────
+    /**
+     * POST /api/appointments/create
+     *
+     * Called from mobile bookings.jsx after the patient selects a payment method.
+     * Accepts payment fields: paymentStatus, paymentMethod, price.
+     *
+     * Body example:
+     * {
+     *   "patientId":     1,
+     *   "testType":      "FBC (FULL BLOOD COUNT)",
+     *   "scheduledDate": "2025-06-20",
+     *   "scheduledTime": "09:30",
+     *   "price":         "₦7,000.00",
+     *   "paymentStatus": "PENDING_CONFIRMATION",   // or "PAY_ON_ARRIVAL" / "UNPAID"
+     *   "paymentMethod": "PAY_NOW"                 // or "PAY_ON_ARRIVAL"
+     * }
+     */
+    @PostMapping("/create")
+    public ResponseEntity<?> createAppointmentFromMobile(
+            @RequestBody Map<String, Object> requestBody,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        try {
+            if (userDetails == null) {
+                return ResponseEntity.status(401).body(Map.of("success", false, "message", "Authentication required"));
+            }
+
+            Map<String, Object> response = appointmentService.createAppointmentFromMobile(requestBody, userDetails);
+
+            if ((Boolean) response.get("success")) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.badRequest().body(response);
+            }
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "success", false,
+                "message", "Error creating appointment: " + e.getMessage()
+            ));
+        }
+    }
+
+    // ── Existing: Create appointment (old DTO path) ───────────────────────────
     @PostMapping
-    public ResponseEntity<?> createAppointment(@Valid @RequestBody AppointmentDto appointmentDto,
-                                             @AuthenticationPrincipal UserDetails userDetails) {
+    public ResponseEntity<?> createAppointment(
+            @Valid @RequestBody AppointmentDto appointmentDto,
+            @AuthenticationPrincipal UserDetails userDetails) {
         try {
             Map<String, Object> response = appointmentService.createAppointment(appointmentDto, userDetails);
-            
             if ((Boolean) response.get("success")) {
                 return ResponseEntity.ok(response);
             } else {
@@ -40,13 +82,14 @@ public class AppointmentController {
         }
     }
 
+    // ── WebSocket ─────────────────────────────────────────────────────────────
     @MessageMapping("/admin/appointment")
-@SendTo("/topic/admin/appointments")
-public AppointmentNotification notifyAdminAppointment(AppointmentNotification notification) {
-    return notification;
-}
+    @SendTo("/topic/admin/appointments")
+    public AppointmentNotification notifyAdminAppointment(AppointmentNotification notification) {
+        return notification;
+    }
 
-    // Get all appointments for current user
+    // ── Get all appointments for current user ─────────────────────────────────
     @GetMapping
     public ResponseEntity<?> getUserAppointments(@AuthenticationPrincipal UserDetails userDetails) {
         try {
@@ -57,7 +100,7 @@ public AppointmentNotification notifyAdminAppointment(AppointmentNotification no
         }
     }
 
-    // Get upcoming appointments for current user
+    // ── Upcoming only ─────────────────────────────────────────────────────────
     @GetMapping("/upcoming")
     public ResponseEntity<?> getUpcomingAppointments(@AuthenticationPrincipal UserDetails userDetails) {
         try {
@@ -68,14 +111,14 @@ public AppointmentNotification notifyAdminAppointment(AppointmentNotification no
         }
     }
 
-    // Update appointment
+    // ── Update appointment ────────────────────────────────────────────────────
     @PutMapping("/{id}")
-    public ResponseEntity<?> updateAppointment(@PathVariable Long id,
-                                             @Valid @RequestBody AppointmentDto appointmentDto,
-                                             @AuthenticationPrincipal UserDetails userDetails) {
+    public ResponseEntity<?> updateAppointment(
+            @PathVariable Long id,
+            @Valid @RequestBody AppointmentDto appointmentDto,
+            @AuthenticationPrincipal UserDetails userDetails) {
         try {
             Map<String, Object> response = appointmentService.updateAppointment(id, appointmentDto, userDetails);
-            
             if ((Boolean) response.get("success")) {
                 return ResponseEntity.ok(response);
             } else {
@@ -86,13 +129,13 @@ public AppointmentNotification notifyAdminAppointment(AppointmentNotification no
         }
     }
 
-    // Cancel appointment
+    // ── Cancel appointment ────────────────────────────────────────────────────
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> cancelAppointment(@PathVariable Long id,
-                                             @AuthenticationPrincipal UserDetails userDetails) {
+    public ResponseEntity<?> cancelAppointment(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserDetails userDetails) {
         try {
             Map<String, Object> response = appointmentService.cancelAppointment(id, userDetails);
-            
             if ((Boolean) response.get("success")) {
                 return ResponseEntity.ok(response);
             } else {
@@ -103,17 +146,16 @@ public AppointmentNotification notifyAdminAppointment(AppointmentNotification no
         }
     }
 
-    // Change appointment status
+    // ── Status-only patch ─────────────────────────────────────────────────────
     @PatchMapping("/{id}/status")
-    public ResponseEntity<?> updateAppointmentStatus(@PathVariable Long id,
-                                                   @RequestParam String status,
-                                                   @AuthenticationPrincipal UserDetails userDetails) {
+    public ResponseEntity<?> updateAppointmentStatus(
+            @PathVariable Long id,
+            @RequestParam String status,
+            @AuthenticationPrincipal UserDetails userDetails) {
         try {
-            AppointmentDto appointmentDto = new AppointmentDto();
-            appointmentDto.setStatus(status);
-            
-            Map<String, Object> response = appointmentService.updateAppointment(id, appointmentDto, userDetails);
-            
+            AppointmentDto dto = new AppointmentDto();
+            dto.setStatus(status);
+            Map<String, Object> response = appointmentService.updateAppointment(id, dto, userDetails);
             if ((Boolean) response.get("success")) {
                 return ResponseEntity.ok(response);
             } else {

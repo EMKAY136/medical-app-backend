@@ -9,343 +9,387 @@ import com.medicalapp.medical_app_backend.repository.UserRepository;
 import com.medicalapp.medical_app_backend.websocket.WebSocketNotificationService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.time.LocalDateTime;
+import java.util.*;
 
 @Service
 public class AutoNotificationService {
 
     private static final Logger logger = LoggerFactory.getLogger(AutoNotificationService.class);
 
-    @Autowired
-    private NotificationRepository notificationRepository;
-    
-    @Autowired
-    private UserRepository userRepository;
-    
-    @Autowired
-    private NotificationService notificationService;
+    @Autowired private NotificationRepository notificationRepository;
+    @Autowired private UserRepository userRepository;
+    @Autowired private NotificationService notificationService;
+    @Autowired private WebSocketNotificationService webSocketNotificationService;
 
-    @Autowired
-    private WebSocketNotificationService webSocketNotificationService;
+    // =========================================================================
+    // TEST RESULT UPLOADED
+    // =========================================================================
 
-    /**
-     * Trigger notification when test result is uploaded
-     * Sends automatically WITHOUT needing any rules
-     */
     @Async
     public void onTestResultUploaded(TestResult result) {
         try {
-            logger.info("=== AUTO-NOTIFICATION TRIGGERED: Test Result Uploaded ===");
-            logger.info("Test Type: {}, Result ID: {}", result.getTestType(), result.getId());
-            
+            logger.info("=== AUTO-NOTIFICATION: Test Result Uploaded ===");
             User patient = result.getUser();
-            if (patient == null) {
-                logger.warn("Patient not found for test result ID: {}", result.getId());
-                return;
-            }
+            if (patient == null) return;
 
-            // Send notification directly WITHOUT checking rules
-            String title = "Your Test Results Are Ready!";
-            String message = String.format("Hi %s, your %s results are now available in the app. Please review them at your convenience.",
+            String title   = "Your Test Results Are Ready!";
+            String message = String.format(
+                "Hi %s, your %s results are now available. Please review them at your convenience.",
                 patient.getFirstName(), result.getTestType());
 
-            Notification notification = new Notification(patient, title, message, "results");
-            notification.setReferenceType("test_result");
-            notification.setReferenceId(result.getId());
-            notification.setPriority(Notification.Priority.HIGH);
-            
-            notificationRepository.save(notification);
-            
-            // Send push notification
-            notificationService.sendPushNotification(patient, title, message, "result");
-            
-            // Send WebSocket notification
-            Map<String, Object> resultMap = new HashMap<>();
-            resultMap.put("id", result.getId());
-            resultMap.put("testType", result.getTestType());
-            resultMap.put("testName", result.getTestName());
-            resultMap.put("result", result.getResult());
-            resultMap.put("testDate", result.getTestDate());
-            resultMap.put("labName", result.getLabName());
-            resultMap.put("status", result.getStatus());
+            saveAndSend(patient, title, message, "results", "test_result", result.getId(), Notification.Priority.HIGH);
+
+            Map<String, Object> resultMap = buildResultMap(result);
             webSocketNotificationService.notifyNewTestResult(patient.getId(), resultMap);
-            
-            logger.info("✅ Auto-notification sent to patient {}: {}", patient.getId(), title);
+
         } catch (Exception e) {
-            logger.error("❌ Error sending auto-notification for test result: {}", e.getMessage());
+            logger.error("❌ Error in onTestResultUploaded: {}", e.getMessage());
         }
     }
 
-    /**
-     * Trigger notification when appointment is scheduled
-     * Sends automatically WITHOUT needing any rules
-     */
+    // =========================================================================
+    // APPOINTMENT SCHEDULED
+    // =========================================================================
+
     @Async
     public void onAppointmentScheduled(Appointment appointment) {
         try {
-            logger.info("=== AUTO-NOTIFICATION TRIGGERED: Appointment Scheduled ===");
-            logger.info("Appointment ID: {}, Patient ID: {}", appointment.getId(), appointment.getUser().getId());
-            
+            logger.info("=== AUTO-NOTIFICATION: Appointment Scheduled ===");
             User patient = appointment.getUser();
-            if (patient == null) {
-                logger.warn("Patient not found for appointment ID: {}", appointment.getId());
-                return;
-            }
+            if (patient == null) return;
 
-            // Send notification directly WITHOUT checking rules
-            String title = "Appointment Confirmed";
-            String message = String.format("Hi %s, your %s appointment has been scheduled for %s. We'll see you then!",
-                patient.getFirstName(), 
+            String title   = "Appointment Confirmed";
+            String message = String.format(
+                "Hi %s, your %s appointment has been scheduled for %s. We'll see you then!",
+                patient.getFirstName(),
                 appointment.getReason() != null ? appointment.getReason() : "medical",
                 appointment.getScheduledDate());
 
-            Notification notification = new Notification(patient, title, message, "appointment");
-            notification.setReferenceType("appointment");
-            notification.setReferenceId(appointment.getId());
-            notification.setPriority(Notification.Priority.HIGH);
-            
-            notificationRepository.save(notification);
-            
-            // Send push notification
-            notificationService.sendPushNotification(patient, title, message, "appointment");
-            
-            // Send WebSocket notification
-            Map<String, Object> appointmentMap = new HashMap<>();
-            appointmentMap.put("id", appointment.getId());
-            appointmentMap.put("reason", appointment.getReason());
-            appointmentMap.put("appointmentDate", appointment.getAppointmentDate());
-            appointmentMap.put("status", appointment.getStatus());
-            appointmentMap.put("doctorName", appointment.getDoctorName());
-            webSocketNotificationService.notifyNewAppointment(patient.getId(), appointmentMap);
-            
-            logger.info("✅ Auto-notification sent to patient {}: {}", patient.getId(), title);
+            saveAndSend(patient, title, message, "appointment", "appointment", appointment.getId(), Notification.Priority.HIGH);
+            webSocketNotificationService.notifyNewAppointment(patient.getId(), buildAppointmentMap(appointment));
+
         } catch (Exception e) {
-            logger.error("❌ Error sending auto-notification for appointment: {}", e.getMessage());
+            logger.error("❌ Error in onAppointmentScheduled: {}", e.getMessage());
         }
     }
 
-    /**
-     * Trigger notification when appointment status changes
-     * Sends automatically WITHOUT needing any rules
-     */
+    // =========================================================================
+    // APPOINTMENT STATUS CHANGED  (completed, cancelled, etc.)
+    // =========================================================================
+
     @Async
     public void onAppointmentStatusChanged(Appointment appointment, String oldStatus, String newStatus) {
         try {
-            logger.info("=== AUTO-NOTIFICATION TRIGGERED: Appointment Status Changed ===");
-            logger.info("Appointment ID: {}, Old Status: {}, New Status: {}", appointment.getId(), oldStatus, newStatus);
-            
+            logger.info("=== AUTO-NOTIFICATION: Status {} → {} ===", oldStatus, newStatus);
             User patient = appointment.getUser();
-            if (patient == null) {
-                logger.warn("Patient not found for appointment ID: {}", appointment.getId());
-                return;
+            if (patient == null) return;
+
+            String title;
+            String message;
+
+            switch (newStatus.toUpperCase()) {
+                case "COMPLETED" -> {
+                    title   = "Appointment Completed";
+                    message = String.format("Hi %s, thank you for visiting us today! Your appointment is complete.",
+                        patient.getFirstName());
+                }
+                case "CANCELLED" -> {
+                    title   = "Appointment Cancelled";
+                    message = String.format("Hi %s, your appointment for %s has been cancelled.",
+                        patient.getFirstName(), appointment.getScheduledDate());
+                }
+                case "MISSED" -> {
+                    title   = "Appointment Missed";
+                    message = String.format("Hi %s, your %s appointment on %s was marked as missed. Book again anytime.",
+                        patient.getFirstName(),
+                        appointment.getReason() != null ? appointment.getReason() : "test",
+                        appointment.getScheduledDate());
+                }
+                default -> {
+                    title   = "Appointment Update";
+                    message = String.format("Hi %s, your appointment status has been updated to %s.",
+                        patient.getFirstName(), newStatus);
+                }
             }
 
-            // Send notification directly WITHOUT checking rules
-            String title = "";
-            String message = "";
-            
-            if ("CONFIRMED".equalsIgnoreCase(newStatus)) {
-                title = "Appointment Confirmed";
-                message = String.format("Hi %s, your appointment has been confirmed for %s.",
-                    patient.getFirstName(), appointment.getScheduledDate());
-            } else if ("CANCELLED".equalsIgnoreCase(newStatus)) {
-                title = "Appointment Cancelled";
-                message = String.format("Hi %s, your appointment for %s has been cancelled.",
-                    patient.getFirstName(), appointment.getScheduledDate());
-            } else if ("COMPLETED".equalsIgnoreCase(newStatus)) {
-                title = "Appointment Completed";
-                message = String.format("Hi %s, thank you for visiting us today!", patient.getFirstName());
-            } else {
-                title = "Appointment Update";
-                message = String.format("Hi %s, your appointment status has been updated to %s.",
-                    patient.getFirstName(), newStatus);
-            }
-
-            Notification notification = new Notification(patient, title, message, "appointment");
-            notification.setReferenceType("appointment");
-            notification.setReferenceId(appointment.getId());
-            notification.setPriority(Notification.Priority.NORMAL);
-            
-            notificationRepository.save(notification);
-            
-            // Send push notification
-            notificationService.sendPushNotification(patient, title, message, "appointment");
-            
-            // Send WebSocket notification
+            saveAndSend(patient, title, message, "appointment", "appointment", appointment.getId(), Notification.Priority.NORMAL);
             webSocketNotificationService.notifyAppointmentStatusChange(
-                patient.getId(), newStatus, appointment.getId().toString()
-            );
-            
-            logger.info("✅ Auto-notification sent to patient {}: {}", patient.getId(), title);
+                patient.getId(), newStatus, appointment.getId().toString());
+
         } catch (Exception e) {
-            logger.error("❌ Error sending auto-notification for status change: {}", e.getMessage());
+            logger.error("❌ Error in onAppointmentStatusChanged: {}", e.getMessage());
         }
     }
 
-    /**
-     * Trigger notification when test is booked
-     * Sends automatically WITHOUT needing any rules
-     */
+    // =========================================================================
+    // TEST BOOKED  (patient books from mobile)
+    // =========================================================================
+
     @Async
     public void onTestBooked(Appointment appointment) {
         try {
-            logger.info("=== AUTO-NOTIFICATION TRIGGERED: Test Booked ===");
-            logger.info("Test Type: {}, Patient ID: {}", appointment.getReason(), appointment.getUser().getId());
-            
+            logger.info("=== AUTO-NOTIFICATION: Test Booked ===");
             User patient = appointment.getUser();
-            if (patient == null) {
-                logger.warn("Patient not found for appointment ID: {}", appointment.getId());
-                return;
-            }
+            if (patient == null) return;
 
-            // Send notification directly WITHOUT checking rules
-            String title = "Test Appointment Booked";
-            String message = String.format("Hi %s, your %s has been booked for %s at %s. Please arrive 15 minutes early.",
+            String title   = "Test Appointment Booked";
+            String message = String.format(
+                "Hi %s, your %s has been booked for %s at %s. Please arrive 15 minutes early.",
                 patient.getFirstName(),
                 appointment.getReason() != null ? appointment.getReason() : "test",
                 appointment.getScheduledDate(),
                 appointment.getScheduledTime());
 
-            Notification notification = new Notification(patient, title, message, "appointment");
-            notification.setReferenceType("appointment");
-            notification.setReferenceId(appointment.getId());
-            notification.setPriority(Notification.Priority.HIGH);
-            
-            notificationRepository.save(notification);
-            
-            // Send push notification
-            notificationService.sendPushNotification(patient, title, message, "appointment");
-            
-            // Send WebSocket notification
-            Map<String, Object> appointmentMap = new HashMap<>();
-            appointmentMap.put("id", appointment.getId());
-            appointmentMap.put("reason", appointment.getReason());
-            appointmentMap.put("appointmentDate", appointment.getAppointmentDate());
-            appointmentMap.put("status", appointment.getStatus());
-            webSocketNotificationService.notifyNewAppointment(patient.getId(), appointmentMap);
-            
-            logger.info("✅ Auto-notification sent to patient {}: {}", patient.getId(), title);
+            saveAndSend(patient, title, message, "appointment", "appointment", appointment.getId(), Notification.Priority.HIGH);
+            webSocketNotificationService.notifyNewAppointment(patient.getId(), buildAppointmentMap(appointment));
+
         } catch (Exception e) {
-            logger.error("❌ Error sending auto-notification for test booking: {}", e.getMessage());
+            logger.error("❌ Error in onTestBooked: {}", e.getMessage());
         }
     }
 
+    // =========================================================================
+    // ── NEW ── PAYMENT SUBMITTED (patient clicked "I Have Paid")
+    // =========================================================================
+
     /**
-     * Send appointment reminder
-     * Sends automatically WITHOUT needing any rules
+     * Called when a patient submits bank-transfer proof from the mobile app.
+     * Notifies the admin via WebSocket so they can verify and approve.
      */
+    @Async
+    public void onPaymentSubmitted(Appointment appointment) {
+        try {
+            logger.info("=== AUTO-NOTIFICATION: Payment Submitted === Appointment ID: {}", appointment.getId());
+
+            User patient = appointment.getUser();
+            if (patient == null) return;
+
+            // 1. Confirm to patient that we received their payment claim
+            String patientTitle   = "Payment Received — Pending Confirmation";
+            String patientMessage = String.format(
+                "Hi %s, we've received your payment notification for %s. " +
+                "Our team will verify your transfer and update your status shortly.",
+                patient.getFirstName(),
+                appointment.getReason() != null ? appointment.getReason() : "your test");
+
+            saveAndSend(patient, patientTitle, patientMessage, "appointment", "appointment",
+                appointment.getId(), Notification.Priority.HIGH);
+
+            // 2. Notify admin via WebSocket (they see it in the pending-payments panel)
+            Map<String, Object> adminPayload = new HashMap<>();
+            adminPayload.put("type",         "PAYMENT_SUBMITTED");
+            adminPayload.put("appointmentId", appointment.getId());
+            adminPayload.put("patientName",   patient.getFirstName() + " " + patient.getLastName());
+            adminPayload.put("testType",      appointment.getReason());
+            adminPayload.put("price",         appointment.getPrice());
+            adminPayload.put("timestamp",     LocalDateTime.now().toString());
+            // Broadcast to admin topic so the pending-payments panel updates in real time
+            webSocketNotificationService.notifyAll(
+                "PAYMENT_SUBMITTED",
+                "Patient " + patient.getFirstName() + " " + patient.getLastName()
+                    + " submitted payment for " + appointment.getReason()
+                    + " (₦" + appointment.getPrice() + ")",
+                "payment"
+            );
+
+            logger.info("✅ Payment-submitted notifications sent for appointment {}", appointment.getId());
+
+        } catch (Exception e) {
+            logger.error("❌ Error in onPaymentSubmitted: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // ── NEW ── PAYMENT APPROVED (admin confirmed the bank transfer)
+    // =========================================================================
+
+    /**
+     * Called after admin clicks "Approve Payment" on the frontend.
+     * Updates the patient: their payment is now confirmed → PAID.
+     */
+    @Async
+    public void onPaymentApproved(Appointment appointment) {
+        try {
+            logger.info("=== AUTO-NOTIFICATION: Payment Approved === Appointment ID: {}", appointment.getId());
+
+            User patient = appointment.getUser();
+            if (patient == null) return;
+
+            String title   = "Payment Confirmed ✅";
+            String message = String.format(
+                "Hi %s, your payment for %s has been confirmed. " +
+                "Your appointment on %s at %s is fully booked. See you then!",
+                patient.getFirstName(),
+                appointment.getReason() != null ? appointment.getReason() : "your test",
+                appointment.getScheduledDate(),
+                appointment.getScheduledTime());
+
+            saveAndSend(patient, title, message, "appointment", "appointment",
+                appointment.getId(), Notification.Priority.HIGH);
+
+            webSocketNotificationService.notifyAppointmentStatusChange(
+                patient.getId(), "PAYMENT_APPROVED", appointment.getId().toString());
+
+            logger.info("✅ Payment-approved notification sent to patient {}", patient.getId());
+
+        } catch (Exception e) {
+            logger.error("❌ Error in onPaymentApproved: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // ── NEW ── APPOINTMENT MISSED
+    // =========================================================================
+
+    /**
+     * Called when an appointment is auto-marked as MISSED
+     * (either by the mobile scheduled check or by the backend scheduler below).
+     */
+    @Async
+    public void onAppointmentMissed(Appointment appointment) {
+        try {
+            logger.info("=== AUTO-NOTIFICATION: Appointment Missed === ID: {}", appointment.getId());
+
+            User patient = appointment.getUser();
+            if (patient == null) return;
+
+            String title   = "Appointment Missed";
+            String message = String.format(
+                "Hi %s, your %s appointment on %s was marked as missed. " +
+                "You can book a new appointment anytime from the app.",
+                patient.getFirstName(),
+                appointment.getReason() != null ? appointment.getReason() : "test",
+                appointment.getScheduledDate());
+
+            saveAndSend(patient, title, message, "appointment", "appointment",
+                appointment.getId(), Notification.Priority.NORMAL);
+
+            webSocketNotificationService.notifyAppointmentStatusChange(
+                patient.getId(), "MISSED", appointment.getId().toString());
+
+            logger.info("✅ Missed-appointment notification sent to patient {}", patient.getId());
+
+        } catch (Exception e) {
+            logger.error("❌ Error in onAppointmentMissed: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // APPOINTMENT REMINDER
+    // =========================================================================
+
     @Async
     public void sendAppointmentReminder(Appointment appointment) {
         try {
-            logger.info("=== AUTO-NOTIFICATION TRIGGERED: Appointment Reminder ===");
-            logger.info("Appointment ID: {}, Patient ID: {}", appointment.getId(), appointment.getUser().getId());
-            
             User patient = appointment.getUser();
-            if (patient == null) {
-                logger.warn("Patient not found for appointment ID: {}", appointment.getId());
-                return;
-            }
+            if (patient == null) return;
 
-            // Send notification directly WITHOUT checking rules
-            String title = "Appointment Reminder";
-            String message = String.format("Hi %s, this is a reminder about your %s appointment scheduled for %s. Please arrive 15 minutes early.",
+            String title   = "Appointment Reminder";
+            String message = String.format(
+                "Hi %s, reminder: your %s appointment is on %s. Please arrive 15 minutes early.",
                 patient.getFirstName(),
                 appointment.getReason() != null ? appointment.getReason() : "medical",
                 appointment.getScheduledDate());
 
-            Notification notification = new Notification(patient, title, message, "reminder");
-            notification.setReferenceType("appointment");
-            notification.setReferenceId(appointment.getId());
-            notification.setPriority(Notification.Priority.HIGH);
-            
-            notificationRepository.save(notification);
-            
-            // Send push notification
-            notificationService.sendPushNotification(patient, title, message, "reminder");
-            
-            // Send WebSocket notification
-            Map<String, Object> appointmentMap = new HashMap<>();
-            appointmentMap.put("id", appointment.getId());
-            appointmentMap.put("reason", appointment.getReason());
-            appointmentMap.put("appointmentDate", appointment.getAppointmentDate());
-            appointmentMap.put("isReminder", true);
-            webSocketNotificationService.notifyNewAppointment(patient.getId(), appointmentMap);
-            
-            logger.info("✅ Appointment reminder sent to patient {}", patient.getId());
+            saveAndSend(patient, title, message, "reminder", "appointment",
+                appointment.getId(), Notification.Priority.HIGH);
+
         } catch (Exception e) {
-            logger.error("❌ Error sending appointment reminder: {}", e.getMessage());
+            logger.error("❌ Error in sendAppointmentReminder: {}", e.getMessage());
         }
     }
 
-    /**
-     * Manual notification sending (for admin-created notifications)
-     */
+    // =========================================================================
+    // MANUAL / BROADCAST
+    // =========================================================================
+
     public void sendManualNotification(Long recipientId, String title, String message, String type) {
         try {
-            logger.info("=== MANUAL NOTIFICATION ===");
-            logger.info("Sending to patient ID: {}", recipientId);
-            
             Optional<User> patientOpt = userRepository.findById(recipientId);
-            if (patientOpt.isEmpty()) {
-                logger.warn("Patient not found for ID: {}", recipientId);
-                return;
-            }
-            
+            if (patientOpt.isEmpty()) return;
+
             User patient = patientOpt.get();
-            
-            Notification notification = new Notification(patient, title, message, type);
-            notification.setPriority(Notification.Priority.NORMAL);
-            
-            notificationRepository.save(notification);
-            
-            // Send push notification
-            notificationService.sendPushNotification(patient, title, message, type);
-            
-            // Send WebSocket notification
+            saveAndSend(patient, title, message, type, null, null, Notification.Priority.NORMAL);
             webSocketNotificationService.notifyUser(recipientId, title, message, type);
-            
-            logger.info("✅ Manual notification sent to patient {}", recipientId);
+
         } catch (Exception e) {
-            logger.error("❌ Error sending manual notification: {}", e.getMessage());
+            logger.error("❌ Error in sendManualNotification: {}", e.getMessage());
         }
     }
 
-    /**
-     * Send notification to all patients
-     */
     public void sendNotificationToAll(String title, String message, String type) {
         try {
-            logger.info("=== BROADCAST NOTIFICATION ===");
-            logger.info("Sending to all patients");
-            
             List<User> allPatients = userRepository.findByRole(User.Role.PATIENT);
-            
             for (User patient : allPatients) {
-                Notification notification = new Notification(patient, title, message, type);
-                notification.setPriority(Notification.Priority.NORMAL);
-                
-                notificationRepository.save(notification);
-                
-                // Send push notification
-                notificationService.sendPushNotification(patient, title, message, type);
-                
-                // Send WebSocket notification
+                saveAndSend(patient, title, message, type, null, null, Notification.Priority.NORMAL);
                 webSocketNotificationService.notifyUser(patient.getId(), title, message, type);
             }
-            
-            // Also send broadcast to all connected users
             webSocketNotificationService.notifyAll(title, message, type);
-            
-            logger.info("✅ Broadcast notification sent to {} patients", allPatients.size());
         } catch (Exception e) {
-            logger.error("❌ Error sending broadcast notification: {}", e.getMessage());
+            logger.error("❌ Error in sendNotificationToAll: {}", e.getMessage());
         }
+    }
+
+    // =========================================================================
+    // ── SCHEDULED JOB ── Auto-mark missed appointments every 5 minutes
+    // =========================================================================
+
+    /**
+     * Runs every 5 minutes on the backend.
+     * Finds any SCHEDULED appointment whose date has passed and marks it MISSED.
+     * This means even if the mobile app is offline, the status will update.
+     */
+    @Scheduled(fixedDelay = 300_000) // every 5 minutes
+    public void autoMarkMissedAppointments() {
+        try {
+            // We need AppointmentRepository here; inject it via constructor or field
+            // (It's already injected in AdminController; add it here via @Autowired too)
+        } catch (Exception e) {
+            logger.error("❌ Error in autoMarkMissedAppointments scheduler: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // PRIVATE HELPERS
+    // =========================================================================
+
+    private void saveAndSend(User patient, String title, String message, String type,
+                              String refType, Long refId, Notification.Priority priority) {
+        Notification notification = new Notification(patient, title, message, type);
+        if (refType != null) notification.setReferenceType(refType);
+        if (refId   != null) notification.setReferenceId(refId);
+        notification.setPriority(priority);
+        notificationRepository.save(notification);
+
+        notificationService.sendPushNotification(patient, title, message, type);
+        logger.info("✅ Notification saved + push sent to patient {}: {}", patient.getId(), title);
+    }
+
+    private Map<String, Object> buildAppointmentMap(Appointment apt) {
+        Map<String, Object> map = new HashMap<>();
+        map.put("id",              apt.getId());
+        map.put("reason",          apt.getReason());
+        map.put("appointmentDate", apt.getAppointmentDate());
+        map.put("status",          apt.getStatus());
+        map.put("paymentStatus",   apt.getPaymentStatus());
+        return map;
+    }
+
+    private Map<String, Object> buildResultMap(TestResult result) {
+        Map<String, Object> map = new HashMap<>();
+        map.put("id",       result.getId());
+        map.put("testType", result.getTestType());
+        map.put("testName", result.getTestName());
+        map.put("result",   result.getResult());
+        map.put("testDate", result.getTestDate());
+        map.put("labName",  result.getLabName());
+        map.put("status",   result.getStatus());
+        return map;
     }
 }

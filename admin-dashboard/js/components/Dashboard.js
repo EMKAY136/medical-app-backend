@@ -1,431 +1,246 @@
+const { useState, useEffect } = React;
+
 const MedicalAdminDashboard = () => {
-    const [isAuthenticated, setIsAuthenticated] = useState(false);
-    const [currentView, setCurrentView] = useState('dashboard');
-    const [patients, setPatients] = useState([]);
-    const [appointments, setAppointments] = useState([]);
-    const [testResults, setTestResults] = useState([]);
-    const [notifications, setNotifications] = useState([]);
+    const [isAuthenticated, setIsAuthenticated]   = useState(false);
+    const [currentView, setCurrentView]           = useState('dashboard');
+    const [patients, setPatients]                 = useState([]);
+    const [appointments, setAppointments]         = useState([]);
+    const [testResults, setTestResults]           = useState([]);
+    const [notifications, setNotifications]       = useState([]);
     const [autoNotifications, setAutoNotifications] = useState([]);
-    const [loading, setLoading] = useState(false);
-    const [showModal, setShowModal] = useState(null);
-    const [selectedPatient, setSelectedPatient] = useState(null);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [notification, setNotification] = useState(null);
-    const [showNotificationForm, setShowNotificationForm] = useState(false);
+    const [loading, setLoading]                   = useState(false);
+    const [showModal, setShowModal]               = useState(null);
+    const [selectedPatient, setSelectedPatient]   = useState(null);
+    const [searchQuery, setSearchQuery]           = useState('');
+    const [notification, setNotification]         = useState(null);
+    const [showNotificationForm, setShowNotificationForm]     = useState(false);
     const [showAutoNotificationForm, setShowAutoNotificationForm] = useState(false);
-    const [notificationTab, setNotificationTab] = useState('sent');
+    const [notificationTab, setNotificationTab]   = useState('sent');
 
-    // ── Support Chat State ──────────────────────────────────────
-    const [showSupportChat, setShowSupportChat] = useState(false);
+    // Support Chat
+    const [showSupportChat, setShowSupportChat]     = useState(false);
     const [supportChatPatient, setSupportChatPatient] = useState(null);
-    // ────────────────────────────────────────────────────────────
 
-    const [formData, setFormData] = useState({
-        recipientId: '',
-        title: '',
-        message: '',
-        type: 'appointment',
-        sendToAll: false,
-    });
-
-    const [autoFormData, setAutoFormData] = useState({
-        trigger: 'appointment_scheduled',
-        title: '',
-        message: '',
-        type: 'appointment',
-        enabled: true,
-        delayMinutes: 0,
-    });
+    const [formData, setFormData] = useState({ recipientId: '', title: '', message: '', type: 'appointment', sendToAll: false });
+    const [autoFormData, setAutoFormData] = useState({ trigger: 'appointment_scheduled', title: '', message: '', type: 'appointment', enabled: true, delayMinutes: 0 });
 
     const [stats, setStats] = useState({
-        totalPatients: 0,
-        todayAppointments: 0,
-        pendingTests: 0,
-        completedReports: 0,
-        totalNotifications: 0,
-        activeAutoRules: 0
+        totalPatients: 0, todayAppointments: 0, pendingTests: 0,
+        completedReports: 0, totalNotifications: 0, activeAutoRules: 0,
+        pendingPayments: 0, missedAppointments: 0,
     });
 
+    // ── Init ─────────────────────────────────────────────────────────────────
     useEffect(() => {
-        console.log('Dashboard mounting...');
         const token = localStorage.getItem('authToken');
-        if (token) {
-            setIsAuthenticated(true);
-            loadDashboardData();
-        }
+        if (token) { setIsAuthenticated(true); loadDashboardData(); }
     }, []);
 
     useEffect(() => {
-        if (patients.length > 0 || appointments.length > 0 || testResults.length > 0 || notifications.length > 0) {
-            loadStats();
-        }
+        if (patients.length > 0 || appointments.length > 0 || testResults.length > 0) loadStats();
     }, [patients, appointments, testResults, notifications, autoNotifications]);
 
+    // Expose globals for WebSocket callbacks
+    useEffect(() => {
+        if (isAuthenticated && window.AdminWebSocketClient) {
+            const wsClient = new window.AdminWebSocketClient();
+            wsClient.connect();
+            window.loadAppointments     = loadAppointments;
+            window.loadPatients         = loadPatients;
+            window.loadTestResults      = loadTestResults;
+            window.loadStats            = loadStats;
+            window.showNotificationAlert = showNotificationAlert;
+            return () => {
+                wsClient.disconnect();
+                ['loadAppointments','loadPatients','loadTestResults','loadStats','showNotificationAlert']
+                    .forEach(k => delete window[k]);
+            };
+        }
+    }, [isAuthenticated]);
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
     const showNotificationAlert = (message, type = 'success') => {
         setNotification({ message, type });
         setTimeout(() => setNotification(null), 4000);
     };
 
-    useEffect(() => {
-        if (isAuthenticated && window.AdminWebSocketClient) {
-            const wsClient = new window.AdminWebSocketClient();
-            wsClient.connect();
-
-            window.loadAppointments = loadAppointments;
-            window.loadPatients = loadPatients;
-            window.loadTestResults = loadTestResults;
-            window.loadStats = loadStats;
-            window.showNotificationAlert = showNotificationAlert;
-
-            return () => {
-                wsClient.disconnect();
-                delete window.loadAppointments;
-                delete window.loadPatients;
-                delete window.loadTestResults;
-                delete window.loadStats;
-                delete window.showNotificationAlert;
-            };
-        }
-    }, [isAuthenticated]);
-
-    const handleLoginSuccess = () => {
-        console.log('Login successful');
-        setIsAuthenticated(true);
-        loadDashboardData();
+    const parseDate = (v) => {
+        if (!v) return null;
+        if (Array.isArray(v)) { const [yr, mo, dy, hr = 0, mn = 0] = v; return new Date(yr, mo - 1, dy, hr, mn); }
+        const d = new Date(v); return isNaN(d.getTime()) ? null : d;
     };
 
-    const handleLogout = () => {
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('user_info');
-        setIsAuthenticated(false);
-        setPatients([]);
-        setAppointments([]);
-        setTestResults([]);
-        setNotifications([]);
-        setAutoNotifications([]);
-    };
-
+    // ── Data loaders ─────────────────────────────────────────────────────────
     const loadDashboardData = async () => {
-        console.log('Loading dashboard data...');
         setLoading(true);
         try {
             await loadPatients();
-            await Promise.all([
-                loadAppointments(),
-                loadTestResults(),
-                loadNotifications(),
-                loadAutoNotifications()
-            ]);
-        } catch (error) {
-            console.error('Error loading dashboard data:', error);
+            await Promise.all([loadAppointments(), loadTestResults(), loadNotifications(), loadAutoNotifications()]);
+        } catch (err) {
             showNotificationAlert('Error loading dashboard data', 'error');
         } finally {
             setLoading(false);
         }
     };
 
-    const loadStats = async () => {
-        try {
-            const today = new Date().toDateString();
-
-            const todayAppointments = appointments.filter(apt =>
-                new Date(apt.appointmentDate || apt.scheduledDate).toDateString() === today
-            ).length;
-
-            const pendingTests = appointments.filter(apt =>
-                apt.status && (apt.status.toLowerCase() === 'scheduled' || apt.status.toLowerCase() === 'pending')
-            ).length;
-
-            const completedReports = testResults.filter(result =>
-                result.status && (result.status.toLowerCase() === 'completed' || result.status.toLowerCase() === 'normal')
-            ).length;
-
-            setStats({
-                totalPatients: patients.length,
-                todayAppointments,
-                pendingTests,
-                completedReports,
-                totalNotifications: notifications.length,
-                activeAutoRules: autoNotifications.filter(n => n.enabled).length
-            });
-        } catch (error) {
-            console.error('Error calculating stats:', error);
-        }
-    };
-
     const loadPatients = async () => {
         try {
-            console.log('Loading patients...');
             const token = localStorage.getItem('authToken');
-            const response = await fetch(
-                `${CONFIG.ADMIN_API_URL}/api/admin/patients?page=0&size=50`,
-                {
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                    },
-                }
-            );
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            const data = await response.json();
-            console.log('Patients loaded:', data);
-            if (data.patients && Array.isArray(data.patients)) {
-                setPatients(data.patients);
-            } else {
-                console.warn('No patients in response');
-                setPatients([]);
-            }
-        } catch (error) {
-            console.error('Error loading patients:', error);
+            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/patients?page=0&size=100`, {
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            setPatients(data.patients && Array.isArray(data.patients) ? data.patients : []);
+        } catch (err) {
+            console.error('Error loading patients:', err);
             showNotificationAlert('Error loading patients', 'error');
         }
     };
 
     const loadAppointments = async () => {
         try {
-            console.log('Loading appointments...');
             const token = localStorage.getItem('authToken');
-            const response = await fetch(
-                `${CONFIG.ADMIN_API_URL}/api/admin/appointments?page=0&size=50`,
-                {
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                    },
-                }
-            );
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            const data = await response.json();
-            console.log('Appointments loaded:', data);
-            if (data.appointments && Array.isArray(data.appointments)) {
-                setAppointments(data.appointments);
-            } else {
-                console.warn('No appointments in response');
-                setAppointments([]);
-            }
-        } catch (error) {
-            console.error('Error loading appointments:', error);
+            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/appointments?page=0&size=200`, {
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            setAppointments(data.appointments && Array.isArray(data.appointments) ? data.appointments : []);
+        } catch (err) {
+            console.error('Error loading appointments:', err);
             showNotificationAlert('Error loading appointments', 'error');
         }
     };
 
     const loadTestResults = async () => {
         try {
-            console.log('Loading test results...');
-            const data = await ApiService.getTestResults(0, 50);
+            const data = await ApiService.getTestResults(0, 100);
             setTestResults(data.results || []);
-        } catch (error) {
-            console.error('Error loading test results:', error);
-            showNotificationAlert('Error loading test results', 'error');
+        } catch (err) {
+            console.error('Error loading test results:', err);
         }
     };
 
     const loadNotifications = async () => {
         try {
             const token = localStorage.getItem('authToken');
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/notifications`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
+            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/notifications`, {
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
             });
-            if (response.ok) {
-                const data = await response.json();
-                setNotifications(data.notifications || []);
-            }
-        } catch (error) {
-            console.error('Error loading notifications:', error);
-        }
+            if (res.ok) { const data = await res.json(); setNotifications(data.notifications || []); }
+        } catch (err) { console.error('Error loading notifications:', err); }
     };
 
     const loadAutoNotifications = async () => {
         try {
             const token = localStorage.getItem('authToken');
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
+            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications`, {
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
             });
-            if (response.ok) {
-                const data = await response.json();
-                setAutoNotifications(data.autoNotifications || []);
-            }
-        } catch (error) {
-            console.error('Error loading auto notifications:', error);
-        }
+            if (res.ok) { const data = await res.json(); setAutoNotifications(data.autoNotifications || []); }
+        } catch (err) { console.error('Error loading auto-notifications:', err); }
     };
 
-    const handleSendNotification = async () => {
-        if (!formData.title.trim() || !formData.message.trim()) {
-            showNotificationAlert('Please fill in all fields', 'error');
-            return;
-        }
-        if (!formData.sendToAll && !formData.recipientId) {
-            showNotificationAlert('Please select a patient or choose "Send to All"', 'error');
-            return;
-        }
-        setLoading(true);
+    const loadStats = () => {
         try {
-            const token = localStorage.getItem('authToken');
-            const endpoint = formData.sendToAll
-                ? `${CONFIG.ADMIN_API_URL}/api/admin/notifications/send-all`
-                : `${CONFIG.ADMIN_API_URL}/api/admin/notifications/send`;
-            const payload = formData.sendToAll
-                ? { title: formData.title, message: formData.message, type: formData.type }
-                : { recipientId: parseInt(formData.recipientId), title: formData.title, message: formData.message, type: formData.type };
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-            if (response.ok) {
-                showNotificationAlert('Notification sent successfully!');
-                setFormData({ recipientId: '', title: '', message: '', type: 'appointment', sendToAll: false });
-                setShowNotificationForm(false);
-                loadNotifications();
-            } else {
-                showNotificationAlert('Failed to send notification', 'error');
-            }
-        } catch (err) {
-            console.error('Error sending notification:', err);
-            showNotificationAlert('Error sending notification', 'error');
-        } finally {
-            setLoading(false);
-        }
-    };
+            const today = new Date().toDateString();
+            const now   = new Date();
 
-    const handleCreateAutoNotification = async () => {
-        if (!autoFormData.title.trim() || !autoFormData.message.trim()) {
-            showNotificationAlert('Please fill in all fields', 'error');
-            return;
-        }
-        setLoading(true);
-        try {
-            const token = localStorage.getItem('authToken');
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify(autoFormData),
-            });
-            if (response.ok) {
-                showNotificationAlert('Auto-notification created successfully!');
-                setAutoFormData({ trigger: 'appointment_scheduled', title: '', message: '', type: 'appointment', enabled: true, delayMinutes: 0 });
-                setShowAutoNotificationForm(false);
-                loadAutoNotifications();
-            } else {
-                showNotificationAlert('Failed to create auto-notification', 'error');
-            }
-        } catch (err) {
-            console.error('Error creating auto-notification:', err);
-            showNotificationAlert('Error creating auto-notification', 'error');
-        } finally {
-            setLoading(false);
-        }
-    };
+            const todayApts = appointments.filter(apt => {
+                const d = parseDate(apt.appointmentDate || apt.scheduledDate || apt.date || apt.createdAt);
+                return d && d.toDateString() === today;
+            }).length;
 
-    const handleDeleteNotification = async (notificationId) => {
-        if (window.confirm('Are you sure?')) {
-            try {
-                const token = localStorage.getItem('authToken');
-                const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/notifications/${notificationId}`, {
-                    method: 'DELETE',
-                    headers: { 'Authorization': `Bearer ${token}` },
-                });
-                if (response.ok) {
-                    setNotifications(notifications.filter(n => n.id !== notificationId));
-                    showNotificationAlert('Notification deleted');
+            const pendingTests = appointments.filter(apt =>
+                ['scheduled', 'pending'].includes((apt.status || '').toLowerCase())
+            ).length;
+
+            const completedReports = testResults.filter(r =>
+                ['completed', 'normal'].includes((r.status || '').toLowerCase())
+            ).length;
+
+            // NEW stats
+            const pendingPayments = appointments.filter(apt =>
+                (apt.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION'
+            ).length;
+
+            const missedAppointments = appointments.filter(apt => {
+                const st = (apt.status || '').toUpperCase();
+                if (st === 'MISSED') return true;
+                if (st === 'SCHEDULED') {
+                    const d = parseDate(apt.appointmentDate || apt.scheduledDate || apt.date);
+                    return d && d < now;
                 }
-            } catch (err) {
-                console.error('Error deleting notification:', err);
-            }
-        }
-    };
+                return false;
+            }).length;
 
-    const handleToggleAutoNotification = async (autoNotifId, currentStatus) => {
-        try {
-            const token = localStorage.getItem('authToken');
-            const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications/${autoNotifId}/toggle`, {
-                method: 'PUT',
-                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: !currentStatus }),
+            setStats({
+                totalPatients: patients.length,
+                todayAppointments: todayApts,
+                pendingTests,
+                completedReports,
+                totalNotifications: notifications.length,
+                activeAutoRules: autoNotifications.filter(n => n.enabled).length,
+                pendingPayments,
+                missedAppointments,
             });
-            if (response.ok) loadAutoNotifications();
-        } catch (err) {
-            console.error('Error toggling auto-notification:', err);
-        }
+        } catch (err) { console.error('Error calculating stats:', err); }
     };
 
-    const handleDeleteAutoNotification = async (autoNotifId) => {
-        if (window.confirm('Are you sure?')) {
-            try {
-                const token = localStorage.getItem('authToken');
-                const response = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications/${autoNotifId}`, {
-                    method: 'DELETE',
-                    headers: { 'Authorization': `Bearer ${token}` },
-                });
-                if (response.ok) {
-                    setAutoNotifications(autoNotifications.filter(n => n.id !== autoNotifId));
-                    showNotificationAlert('Auto-notification deleted');
-                }
-            } catch (err) {
-                console.error('Error deleting auto-notification:', err);
-            }
-        }
+    // ── Actions ──────────────────────────────────────────────────────────────
+    const handleLoginSuccess  = () => { setIsAuthenticated(true); loadDashboardData(); };
+    const handleLogout        = () => {
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('user_info');
+        setIsAuthenticated(false);
+        setPatients([]); setAppointments([]); setTestResults([]);
+        setNotifications([]); setAutoNotifications([]);
     };
 
     const handleUpdateAppointment = async (appointmentId, newStatus) => {
         try {
-            const response = await ApiService.updateAppointmentStatus(appointmentId, newStatus);
-            if (response.ok) {
+            const res = await ApiService.updateAppointmentStatus(appointmentId, newStatus);
+            if (res.ok) {
                 showNotificationAlert(`Appointment ${newStatus.toLowerCase()} successfully!`);
                 await loadAppointments();
             } else {
-                const errorData = await response.json();
-                showNotificationAlert(errorData.message || 'Error updating appointment', 'error');
+                const err = await res.json();
+                showNotificationAlert(err.message || 'Error updating appointment', 'error');
             }
-        } catch (error) {
-            console.error('Error updating appointment:', error);
+        } catch (err) {
             showNotificationAlert('Network error while updating appointment', 'error');
         }
     };
 
     const handleAddResult = async (resultData) => {
         try {
-            console.log('=== SUBMITTING TEST RESULT ===');
             const hasFiles = resultData.attachments && resultData.attachments.length > 0;
             let response;
             if (hasFiles) {
-                const formData = new FormData();
-                formData.append('patientId', resultData.patientId);
-                formData.append('testType', resultData.testType);
-                formData.append('result', resultData.result || '');
-                formData.append('notes', resultData.notes || '');
-                formData.append('category', resultData.category || 'General');
-                formData.append('status', resultData.status || 'COMPLETED');
-                formData.append('doctorName', resultData.doctorName || 'Admin');
-                formData.append('testDate', resultData.testDate || new Date().toISOString());
-                if (resultData.appointmentId) formData.append('appointmentId', resultData.appointmentId);
-                formData.append('markCompleted', resultData.markAppointmentCompleted || false);
-                const attachment = resultData.attachments[0];
-                const base64Data = attachment.data.split(',')[1];
-                const byteCharacters = atob(base64Data);
-                const byteNumbers = new Array(byteCharacters.length);
-                for (let i = 0; i < byteCharacters.length; i++) {
-                    byteNumbers[i] = byteCharacters.charCodeAt(i);
-                }
-                const byteArray = new Uint8Array(byteNumbers);
-                const blob = new Blob([byteArray], { type: attachment.type });
-                const file = new File([blob], attachment.name, { type: attachment.type });
-                formData.append('file', file);
+                const fd = new FormData();
+                fd.append('patientId', resultData.patientId);
+                fd.append('testType', resultData.testType);
+                fd.append('result', resultData.result || '');
+                fd.append('notes', resultData.notes || '');
+                fd.append('category', resultData.category || 'General');
+                fd.append('status', resultData.status || 'COMPLETED');
+                fd.append('doctorName', resultData.doctorName || 'Admin');
+                fd.append('testDate', resultData.testDate || new Date().toISOString());
+                if (resultData.appointmentId) fd.append('appointmentId', resultData.appointmentId);
+                fd.append('markCompleted', resultData.markAppointmentCompleted || false);
+                const att = resultData.attachments[0];
+                const b64 = att.data.split(',')[1];
+                const bytes = atob(b64);
+                const arr = new Uint8Array(bytes.length);
+                for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+                fd.append('file', new File([new Blob([arr], { type: att.type })], att.name, { type: att.type }));
                 const token = localStorage.getItem('authToken');
-                const fetchResponse = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/results/admin/upload-with-file`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` },
-                    body: formData
+                const fetchRes = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/upload-result-with-file`, {
+                    method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd
                 });
-                if (!fetchResponse.ok) throw new Error(`Server returned ${fetchResponse.status}`);
-                response = await fetchResponse.json();
+                if (!fetchRes.ok) throw new Error(`Server returned ${fetchRes.status}`);
+                response = await fetchRes.json();
             } else {
                 response = await ApiService.addTestResult(resultData);
             }
@@ -436,64 +251,118 @@ const MedicalAdminDashboard = () => {
             } else {
                 showNotificationAlert(response.message || 'Failed to add result', 'error');
             }
-        } catch (error) {
-            console.error('Error adding test result:', error);
-            showNotificationAlert('Error: ' + error.message, 'error');
+        } catch (err) {
+            showNotificationAlert('Error: ' + err.message, 'error');
         }
     };
 
-    const filteredPatients = patients.filter(patient => {
-        const fullName = `${patient.firstName || ''} ${patient.lastName || ''}`.toLowerCase();
-        const email = (patient.email || '').toLowerCase();
-        const query = searchQuery.toLowerCase();
-        return fullName.includes(query) || email.includes(query);
+    const handleSendNotification = async () => {
+        if (!formData.title.trim() || !formData.message.trim()) { showNotificationAlert('Fill in all fields', 'error'); return; }
+        if (!formData.sendToAll && !formData.recipientId) { showNotificationAlert('Select a patient or "Send to All"', 'error'); return; }
+        setLoading(true);
+        try {
+            const token    = localStorage.getItem('authToken');
+            const endpoint = formData.sendToAll
+                ? `${CONFIG.ADMIN_API_URL}/api/admin/notifications/send-all`
+                : `${CONFIG.ADMIN_API_URL}/api/admin/notifications/send`;
+            const payload  = formData.sendToAll
+                ? { title: formData.title, message: formData.message, type: formData.type }
+                : { recipientId: parseInt(formData.recipientId), title: formData.title, message: formData.message, type: formData.type };
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (res.ok) {
+                showNotificationAlert('Notification sent!');
+                setFormData({ recipientId: '', title: '', message: '', type: 'appointment', sendToAll: false });
+                setShowNotificationForm(false);
+                loadNotifications();
+            } else { showNotificationAlert('Failed to send notification', 'error'); }
+        } catch (err) { showNotificationAlert('Error sending notification', 'error'); }
+        finally { setLoading(false); }
+    };
+
+    const handleCreateAutoNotification = async () => {
+        if (!autoFormData.title.trim() || !autoFormData.message.trim()) { showNotificationAlert('Fill in all fields', 'error'); return; }
+        setLoading(true);
+        try {
+            const token = localStorage.getItem('authToken');
+            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(autoFormData),
+            });
+            if (res.ok) {
+                showNotificationAlert('Auto-notification created!');
+                setAutoFormData({ trigger: 'appointment_scheduled', title: '', message: '', type: 'appointment', enabled: true, delayMinutes: 0 });
+                setShowAutoNotificationForm(false);
+                loadAutoNotifications();
+            } else { showNotificationAlert('Failed to create auto-notification', 'error'); }
+        } catch (err) { showNotificationAlert('Error creating auto-notification', 'error'); }
+        finally { setLoading(false); }
+    };
+
+    const handleDeleteNotification = async (id) => {
+        if (!window.confirm('Delete this notification?')) return;
+        try {
+            const token = localStorage.getItem('authToken');
+            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/notifications/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+            if (res.ok) { setNotifications(notifications.filter(n => n.id !== id)); showNotificationAlert('Notification deleted'); }
+        } catch (err) { console.error(err); }
+    };
+
+    const handleToggleAutoNotification = async (id, current) => {
+        try {
+            const token = localStorage.getItem('authToken');
+            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications/${id}/toggle`, {
+                method: 'PUT',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: !current }),
+            });
+            if (res.ok) loadAutoNotifications();
+        } catch (err) { console.error(err); }
+    };
+
+    const handleDeleteAutoNotification = async (id) => {
+        if (!window.confirm('Delete this auto-notification?')) return;
+        try {
+            const token = localStorage.getItem('authToken');
+            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+            if (res.ok) { setAutoNotifications(autoNotifications.filter(n => n.id !== id)); showNotificationAlert('Auto-notification deleted'); }
+        } catch (err) { console.error(err); }
+    };
+
+    const filteredPatients = patients.filter(p => {
+        const name  = `${p.firstName || ''} ${p.lastName || ''}`.toLowerCase();
+        const email = (p.email || '').toLowerCase();
+        const q     = searchQuery.toLowerCase();
+        return name.includes(q) || email.includes(q);
     });
 
-    const getTriggerLabel = (trigger) => {
-        const labels = {
-            appointment_scheduled: 'Appointment Scheduled',
-            results_ready: 'Results Ready',
-            appointment_reminder: 'Appointment Reminder',
-            test_booked: 'Test Booked',
-        };
-        return labels[trigger] || trigger;
-    };
+    const getTriggerLabel = (t) => ({
+        appointment_scheduled: 'Appointment Scheduled',
+        results_ready:         'Results Ready',
+        appointment_reminder:  'Appointment Reminder',
+        test_booked:           'Test Booked',
+        payment_approved:      'Payment Approved',
+        appointment_missed:    'Appointment Missed',
+    }[t] || t);
 
-    const getTypeIcon = (type) => {
-        const icons = { appointment: '📅', results: '📊', alert: '⚠️', reminder: '🔔' };
-        return icons[type] || '📬';
-    };
+    const getTypeIcon = (t) => ({ appointment: '📅', results: '📊', alert: '⚠️', reminder: '🔔', payment: '💰' }[t] || '📬');
 
-    const getCurrentUser = () => {
-        try {
-            return JSON.parse(localStorage.getItem('user_info') || '{}');
-        } catch {
-            return {};
-        }
-    };
+    const getCurrentUser = () => { try { return JSON.parse(localStorage.getItem('user_info') || '{}'); } catch { return {}; } };
 
-    console.log('Rendering dashboard, isAuthenticated:', isAuthenticated);
+    // ── Guards ───────────────────────────────────────────────────────────────
+    if (!isAuthenticated) return React.createElement(Login, { onLoginSuccess: handleLoginSuccess });
+    if (loading && patients.length === 0) return (
+        <div className="loading"><div className="spinner"></div><p>Loading dashboard...</p></div>
+    );
 
-    if (!isAuthenticated) {
-        return React.createElement(Login, { onLoginSuccess: handleLoginSuccess });
-    }
-
-    if (loading && patients.length === 0) {
-        return (
-            <div className="loading">
-                <div className="spinner"></div>
-                <p>Loading dashboard data...</p>
-            </div>
-        );
-    }
-
+    // ── Render ───────────────────────────────────────────────────────────────
     return (
         <div className="dashboard" style={{ display: 'flex', minHeight: '100vh' }}>
-            {React.createElement(Sidebar, {
-                currentView,
-                setCurrentView,
-                onLogout: handleLogout
-            })}
+            {React.createElement(Sidebar, { currentView, setCurrentView, onLogout: handleLogout })}
 
             <div className="main-content" style={{ flex: 1, overflowY: 'auto' }}>
                 {React.createElement(Header)}
@@ -505,94 +374,87 @@ const MedicalAdminDashboard = () => {
                     </div>
                 )}
 
-                {/* ── DASHBOARD VIEW ── */}
+                {/* ── DASHBOARD ── */}
                 {currentView === 'dashboard' && (
                     <div>
+                        {/* Extended stats grid */}
                         {React.createElement(StatsGrid, { stats })}
+
+                        {/* Pending payments banner */}
+                        {stats.pendingPayments > 0 && (
+                            <div style={{
+                                margin: '0 20px 20px',
+                                padding: '14px 18px',
+                                background: '#fef3c7',
+                                border: '2px solid #fbbf24',
+                                borderRadius: '10px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between'
+                            }}>
+                                <div style={{ fontWeight: '700', color: '#92400e', fontSize: '15px' }}>
+                                    ⏳ {stats.pendingPayments} payment{stats.pendingPayments > 1 ? 's' : ''} awaiting confirmation
+                                </div>
+                                <button
+                                    onClick={() => setCurrentView('appointments')}
+                                    style={{ padding: '8px 18px', background: '#d97706', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}
+                                >
+                                    Review →
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Missed appointments banner */}
+                        {stats.missedAppointments > 0 && (
+                            <div style={{
+                                margin: '0 20px 20px',
+                                padding: '14px 18px',
+                                background: '#ffedd5',
+                                border: '2px solid #ea580c',
+                                borderRadius: '10px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between'
+                            }}>
+                                <div style={{ fontWeight: '700', color: '#9a3412', fontSize: '15px' }}>
+                                    ⚠️ {stats.missedAppointments} missed appointment{stats.missedAppointments > 1 ? 's' : ''}
+                                </div>
+                                <button
+                                    onClick={() => setCurrentView('appointments')}
+                                    style={{ padding: '8px 18px', background: '#ea580c', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}
+                                >
+                                    View →
+                                </button>
+                            </div>
+                        )}
+
                         <div className="content-grid">
                             {React.createElement(MainPanel, {
-                                patients: filteredPatients,
-                                searchQuery,
-                                setSearchQuery,
-                                setSelectedPatient,
-                                setShowModal,
-                                onUpdateAppointment: handleUpdateAppointment
+                                patients: filteredPatients, searchQuery, setSearchQuery,
+                                setSelectedPatient, setShowModal, onUpdateAppointment: handleUpdateAppointment
                             })}
                             {React.createElement(SidePanel, {
-                                appointments,
-                                setShowModal
+                                appointments, setShowModal, onRefresh: loadAppointments
                             })}
                         </div>
                     </div>
                 )}
 
-                {/* ── PATIENTS VIEW ── */}
+                {/* ── PATIENTS ── */}
                 {currentView === 'patients' && React.createElement(PatientsView, {
-                    patients: filteredPatients,
-                    searchQuery,
-                    setSearchQuery,
-                    setSelectedPatient,
-                    setShowModal,
-                    onUpdateAppointment: handleUpdateAppointment
+                    patients: filteredPatients, searchQuery, setSearchQuery,
+                    setSelectedPatient, setShowModal, onUpdateAppointment: handleUpdateAppointment
                 })}
 
-                {/* ── APPOINTMENTS VIEW ── */}
+                {/* ── APPOINTMENTS ── */}
                 {currentView === 'appointments' && React.createElement(AppointmentsView, {
-                    appointments,
-                    setShowModal
+                    appointments, setShowModal, onRefresh: loadAppointments
                 })}
 
-                {/* ── REPORTS VIEW ── */}
-                {currentView === 'reports' && React.createElement(ReportsView, {
-                    testResults,
-                    setShowModal
-                })}
+                {/* ── REPORTS ── */}
+                {currentView === 'reports' && React.createElement(ReportsView, { testResults, setShowModal })}
 
-                {/* ── SUPPORT CHAT VIEW ── */}
-                {currentView === 'support' && (
-                    <div style={{ padding: '20px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                            <h2 style={{ fontSize: '24px', fontWeight: 'bold', margin: 0 }}>
-                                <i className="fas fa-headset" style={{ marginRight: '10px', color: '#3b82f6' }}></i>
-                                Patient Support Chat
-                            </h2>
-                            <button
-                                className="btn btn-primary"
-                                onClick={() => {
-                                    setSupportChatPatient(null);
-                                    setShowSupportChat(true);
-                                }}
-                            >
-                                <i className="fas fa-comments" style={{ marginRight: '8px' }}></i>
-                                Open Support Center
-                            </button>
-                        </div>
-
-                        <div>
-                            <h3 style={{ fontSize: '15px', fontWeight: '600', marginBottom: '12px', color: '#374151' }}>
-                                Quick Chat with a Patient
-                            </h3>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                {patients.slice(0, 10).map(patient => (
-                                    <button
-                                        key={patient.id}
-                                        className="btn btn-secondary"
-                                        onClick={() => {
-                                            setSupportChatPatient(patient);
-                                            setShowSupportChat(true);
-                                        }}
-                                        style={{ fontSize: '13px' }}
-                                    >
-                                        <i className="fas fa-comment" style={{ marginRight: '6px' }}></i>
-                                        {patient.firstName} {patient.lastName}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* ── NOTIFICATIONS VIEW ── */}
+                {/* ── NOTIFICATIONS ── */}
                 {currentView === 'notifications' && (
                     <div style={{ padding: '20px', maxWidth: '1200px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
@@ -600,12 +462,11 @@ const MedicalAdminDashboard = () => {
                         </div>
 
                         <div style={{ borderBottom: '1px solid #ccc', marginBottom: '20px' }}>
-                            <button onClick={() => setNotificationTab('sent')} style={{ padding: '10px 20px', borderBottom: notificationTab === 'sent' ? '3px solid #007bff' : 'none', background: 'none', border: 'none', cursor: 'pointer', fontWeight: notificationTab === 'sent' ? 'bold' : 'normal' }}>
-                                Send Notifications
-                            </button>
-                            <button onClick={() => setNotificationTab('auto')} style={{ padding: '10px 20px', borderBottom: notificationTab === 'auto' ? '3px solid #007bff' : 'none', background: 'none', border: 'none', cursor: 'pointer', fontWeight: notificationTab === 'auto' ? 'bold' : 'normal' }}>
-                                Auto Notifications
-                            </button>
+                            {['sent', 'auto'].map(tab => (
+                                <button key={tab} onClick={() => setNotificationTab(tab)} style={{ padding: '10px 20px', borderBottom: notificationTab === tab ? '3px solid #007bff' : 'none', background: 'none', border: 'none', cursor: 'pointer', fontWeight: notificationTab === tab ? 'bold' : 'normal' }}>
+                                    {tab === 'sent' ? 'Send Notifications' : 'Auto Notifications'}
+                                </button>
+                            ))}
                         </div>
 
                         {notificationTab === 'sent' && (
@@ -617,56 +478,38 @@ const MedicalAdminDashboard = () => {
                                 {showNotificationForm && (
                                     <div style={{ background: '#f5f5f5', padding: '20px', borderRadius: '5px', marginBottom: '20px' }}>
                                         <label style={{ display: 'block', marginBottom: '10px' }}>
-                                            <input type="checkbox" checked={formData.sendToAll} onChange={(e) => setFormData({ ...formData, sendToAll: e.target.checked })} />
+                                            <input type="checkbox" checked={formData.sendToAll} onChange={e => setFormData({ ...formData, sendToAll: e.target.checked })} />
                                             {' '}Send to All Patients
                                         </label>
-
                                         {!formData.sendToAll && (
                                             <div style={{ marginBottom: '10px' }}>
-                                                <label style={{ display: 'block', marginBottom: '5px' }}>
-                                                    Select Patient ({patients.length} available)
-                                                </label>
-                                                {patients.length === 0 ? (
-                                                    <div style={{ padding: '10px', background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '5px', color: '#856404' }}>
-                                                        No patients found. Make sure patients are loaded first.
-                                                    </div>
-                                                ) : (
-                                                    <select
-                                                        value={formData.recipientId}
-                                                        onChange={(e) => setFormData({ ...formData, recipientId: e.target.value })}
-                                                        style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}
-                                                    >
-                                                        <option value="">Choose a patient...</option>
-                                                        {patients.map(patient => (
-                                                            <option key={patient.id} value={patient.id}>
-                                                                {patient.firstName} {patient.lastName} ({patient.email})
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                )}
+                                                <label style={{ display: 'block', marginBottom: '5px' }}>Select Patient ({patients.length} available)</label>
+                                                <select value={formData.recipientId} onChange={e => setFormData({ ...formData, recipientId: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                                    <option value="">Choose a patient...</option>
+                                                    {patients.map(p => (
+                                                        <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.email})</option>
+                                                    ))}
+                                                </select>
                                             </div>
                                         )}
-
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Type</label>
-                                            <select value={formData.type} onChange={(e) => setFormData({ ...formData, type: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                            <select value={formData.type} onChange={e => setFormData({ ...formData, type: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
                                                 <option value="appointment">Appointment</option>
                                                 <option value="results">Results</option>
                                                 <option value="alert">Alert</option>
                                                 <option value="reminder">Reminder</option>
+                                                <option value="payment">Payment</option>
                                             </select>
                                         </div>
-
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Title</label>
-                                            <input type="text" value={formData.title} onChange={(e) => setFormData({ ...formData, title: e.target.value })} placeholder="Title" maxLength="100" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
+                                            <input type="text" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} placeholder="Title" maxLength="100" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
                                         </div>
-
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Message</label>
-                                            <textarea value={formData.message} onChange={(e) => setFormData({ ...formData, message: e.target.value })} placeholder="Message" maxLength="500" rows="4" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
+                                            <textarea value={formData.message} onChange={e => setFormData({ ...formData, message: e.target.value })} placeholder="Message" maxLength="500" rows="4" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
                                         </div>
-
                                         <button onClick={handleSendNotification} disabled={loading} style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}>
                                             {loading ? 'Sending...' : 'Send'}
                                         </button>
@@ -677,27 +520,21 @@ const MedicalAdminDashboard = () => {
                                 )}
 
                                 <div style={{ marginTop: '20px' }}>
-                                    <h3>Sent Notifications</h3>
-                                    {notifications.length === 0 ? (
-                                        <p>No notifications sent</p>
-                                    ) : (
-                                        <div>
-                                            {notifications.map(notif => (
-                                                <div key={notif.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                                                        <div>
-                                                            <h4 style={{ margin: '0 0 5px 0' }}>{notif.title}</h4>
-                                                            <p style={{ margin: '0 0 5px 0', color: '#666' }}>{notif.message}</p>
-                                                            <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>To: {notif.recipientName || 'All Patients'} | {new Date(notif.createdAt).toLocaleString()}</p>
-                                                        </div>
-                                                        <button onClick={() => handleDeleteNotification(notif.id)} style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
-                                                            Delete
-                                                        </button>
-                                                    </div>
+                                    <h3>Sent Notifications ({notifications.length})</h3>
+                                    {notifications.length === 0 ? <p>No notifications sent</p> : notifications.map(notif => (
+                                        <div key={notif.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                                                <div>
+                                                    <h4 style={{ margin: '0 0 5px' }}>{notif.title}</h4>
+                                                    <p style={{ margin: '0 0 5px', color: '#666' }}>{notif.message}</p>
+                                                    <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>
+                                                        To: {notif.recipientName || 'All Patients'} | {new Date(notif.createdAt).toLocaleString()}
+                                                    </p>
                                                 </div>
-                                            ))}
+                                                <button onClick={() => handleDeleteNotification(notif.id)} style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Delete</button>
+                                            </div>
                                         </div>
-                                    )}
+                                    ))}
                                 </div>
                             </div>
                         )}
@@ -712,96 +549,70 @@ const MedicalAdminDashboard = () => {
                                     <div style={{ background: '#f5f5f5', padding: '20px', borderRadius: '5px', marginBottom: '20px' }}>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Trigger Event</label>
-                                            <select value={autoFormData.trigger} onChange={(e) => setAutoFormData({ ...autoFormData, trigger: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                            <select value={autoFormData.trigger} onChange={e => setAutoFormData({ ...autoFormData, trigger: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
                                                 <option value="appointment_scheduled">Appointment Scheduled</option>
                                                 <option value="results_ready">Results Ready</option>
                                                 <option value="appointment_reminder">Appointment Reminder</option>
                                                 <option value="test_booked">Test Booked</option>
+                                                <option value="payment_approved">Payment Approved</option>
+                                                <option value="appointment_missed">Appointment Missed</option>
                                             </select>
                                         </div>
-
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Delay (minutes)</label>
-                                            <input type="number" value={autoFormData.delayMinutes} onChange={(e) => setAutoFormData({ ...autoFormData, delayMinutes: parseInt(e.target.value) || 0 })} min="0" max="1440" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
+                                            <input type="number" value={autoFormData.delayMinutes} onChange={e => setAutoFormData({ ...autoFormData, delayMinutes: parseInt(e.target.value) || 0 })} min="0" max="1440" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
                                         </div>
-
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Type</label>
-                                            <select value={autoFormData.type} onChange={(e) => setAutoFormData({ ...autoFormData, type: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                            <select value={autoFormData.type} onChange={e => setAutoFormData({ ...autoFormData, type: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
                                                 <option value="appointment">Appointment</option>
                                                 <option value="results">Results</option>
                                                 <option value="alert">Alert</option>
                                                 <option value="reminder">Reminder</option>
+                                                <option value="payment">Payment</option>
                                             </select>
                                         </div>
-
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Title</label>
-                                            <input type="text" value={autoFormData.title} onChange={(e) => setAutoFormData({ ...autoFormData, title: e.target.value })} placeholder="Title" maxLength="100" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
+                                            <input type="text" value={autoFormData.title} onChange={e => setAutoFormData({ ...autoFormData, title: e.target.value })} placeholder="Title" maxLength="100" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
                                         </div>
-
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Message</label>
-                                            <textarea value={autoFormData.message} onChange={(e) => setAutoFormData({ ...autoFormData, message: e.target.value })} placeholder="Message" maxLength="500" rows="4" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
+                                            <textarea value={autoFormData.message} onChange={e => setAutoFormData({ ...autoFormData, message: e.target.value })} placeholder="Message" maxLength="500" rows="4" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
                                         </div>
-
                                         <button onClick={handleCreateAutoNotification} disabled={loading} style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}>
                                             {loading ? 'Creating...' : 'Create'}
                                         </button>
-                                        <button onClick={() => setShowAutoNotificationForm(false)} style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
-                                            Cancel
-                                        </button>
+                                        <button onClick={() => setShowAutoNotificationForm(false)} style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Cancel</button>
                                     </div>
                                 )}
 
                                 <div style={{ marginTop: '20px' }}>
                                     <h3>Auto Notifications</h3>
-                                    {autoNotifications.length === 0 ? (
-                                        <p>No auto notifications configured</p>
-                                    ) : (
-                                        <div>
-                                            {autoNotifications.map(autoNotif => (
-                                                <div key={autoNotif.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                                                        <div style={{ flex: 1 }}>
-                                                            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                                                                <h4 style={{ margin: 0, marginRight: '10px' }}>{autoNotif.title}</h4>
-                                                                <span style={{
-                                                                    padding: '2px 8px',
-                                                                    borderRadius: '12px',
-                                                                    fontSize: '12px',
-                                                                    background: autoNotif.enabled ? '#d4edda' : '#f8d7da',
-                                                                    color: autoNotif.enabled ? '#155724' : '#721c24'
-                                                                }}>
-                                                                    {autoNotif.enabled ? 'Active' : 'Disabled'}
-                                                                </span>
-                                                            </div>
-                                                            <p style={{ margin: '5px 0', color: '#666' }}>{autoNotif.message}</p>
-                                                            <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>
-                                                                Trigger: {getTriggerLabel(autoNotif.trigger)} |
-                                                                Delay: {autoNotif.delayMinutes} min |
-                                                                Type: {getTypeIcon(autoNotif.type)} {autoNotif.type}
-                                                            </p>
-                                                        </div>
-                                                        <div style={{ display: 'flex', gap: '5px' }}>
-                                                            <button
-                                                                onClick={() => handleToggleAutoNotification(autoNotif.id, autoNotif.enabled)}
-                                                                style={{ padding: '5px 10px', background: autoNotif.enabled ? '#ffc107' : '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
-                                                            >
-                                                                {autoNotif.enabled ? 'Disable' : 'Enable'}
-                                                            </button>
-                                                            <button
-                                                                onClick={() => handleDeleteAutoNotification(autoNotif.id)}
-                                                                style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
-                                                            >
-                                                                Delete
-                                                            </button>
-                                                        </div>
+                                    {autoNotifications.length === 0 ? <p>No auto notifications configured</p> : autoNotifications.map(an => (
+                                        <div key={an.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                                                <div style={{ flex: 1 }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                                                        <h4 style={{ margin: 0, marginRight: '10px' }}>{an.title}</h4>
+                                                        <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '12px', background: an.enabled ? '#d4edda' : '#f8d7da', color: an.enabled ? '#155724' : '#721c24' }}>
+                                                            {an.enabled ? 'Active' : 'Disabled'}
+                                                        </span>
                                                     </div>
+                                                    <p style={{ margin: '5px 0', color: '#666' }}>{an.message}</p>
+                                                    <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>
+                                                        Trigger: {getTriggerLabel(an.trigger)} | Delay: {an.delayMinutes} min | {getTypeIcon(an.type)} {an.type}
+                                                    </p>
                                                 </div>
-                                            ))}
+                                                <div style={{ display: 'flex', gap: '5px' }}>
+                                                    <button onClick={() => handleToggleAutoNotification(an.id, an.enabled)} style={{ padding: '5px 10px', background: an.enabled ? '#ffc107' : '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+                                                        {an.enabled ? 'Disable' : 'Enable'}
+                                                    </button>
+                                                    <button onClick={() => handleDeleteAutoNotification(an.id)} style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Delete</button>
+                                                </div>
+                                            </div>
                                         </div>
-                                    )}
+                                    ))}
                                 </div>
                             </div>
                         )}
@@ -809,76 +620,38 @@ const MedicalAdminDashboard = () => {
                 )}
             </div>
 
-            {/* ══════════════════════════════════════════
-                MODALS
-            ══════════════════════════════════════════ */}
-
+            {/* ══ MODALS ══ */}
             {showModal === 'add-result' && React.createElement(AddResultModal, {
-                patients,
-                appointments,
+                patients, appointments,
                 onClose: () => setShowModal(null),
                 onAdd: handleAddResult,
-                showNotification: showNotificationAlert
+                showNotification: showNotificationAlert,
             })}
 
             {showModal === 'patient-details' && selectedPatient && React.createElement(PatientDetailsModal, {
                 patient: selectedPatient,
-                testResults: testResults.filter(result => result.patientId === selectedPatient.id),
-                appointments: appointments.filter(apt => apt.patientId === selectedPatient.id),
-                onClose: () => {
-                    setShowModal(null);
-                    setSelectedPatient(null);
-                },
+                testResults: testResults.filter(r => r.patientId === selectedPatient.id),
+                appointments: appointments.filter(a => a.patientId === selectedPatient.id),
+                onClose: () => { setShowModal(null); setSelectedPatient(null); },
                 showNotification: showNotificationAlert,
-                loadTestResults
+                loadTestResults,
             })}
 
-            {/* ── SUPPORT CHAT MODAL ── */}
             {showSupportChat && window.ChatSupportModal && React.createElement(window.ChatSupportModal, {
-                onClose: () => {
-                    setShowSupportChat(false);
-                    setSupportChatPatient(null);
-                },
+                onClose: () => { setShowSupportChat(false); setSupportChatPatient(null); },
                 isAdmin: true,
                 currentUser: getCurrentUser(),
-                selectedPatient: supportChatPatient
+                selectedPatient: supportChatPatient,
             })}
 
-            {/* ── FLOATING SUPPORT BUTTON (always visible on all views) ── */}
+            {/* Floating support button */}
             {!showSupportChat && (
                 <button
-                    onClick={() => {
-                        setSupportChatPatient(null);
-                        setShowSupportChat(true);
-                    }}
+                    onClick={() => { setSupportChatPatient(null); setShowSupportChat(true); }}
                     title="Open Patient Support Chat"
-                    style={{
-                        position: 'fixed',
-                        bottom: '24px',
-                        right: '24px',
-                        width: '56px',
-                        height: '56px',
-                        borderRadius: '50%',
-                        backgroundColor: '#3b82f6',
-                        color: 'white',
-                        border: 'none',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '20px',
-                        boxShadow: '0 4px 14px rgba(59,130,246,0.5)',
-                        zIndex: 999,
-                        transition: 'transform 0.2s ease, box-shadow 0.2s ease'
-                    }}
-                    onMouseEnter={e => {
-                        e.currentTarget.style.transform = 'scale(1.1)';
-                        e.currentTarget.style.boxShadow = '0 6px 20px rgba(59,130,246,0.65)';
-                    }}
-                    onMouseLeave={e => {
-                        e.currentTarget.style.transform = 'scale(1)';
-                        e.currentTarget.style.boxShadow = '0 4px 14px rgba(59,130,246,0.5)';
-                    }}
+                    style={{ position: 'fixed', bottom: '24px', right: '24px', width: '56px', height: '56px', borderRadius: '50%', backgroundColor: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', boxShadow: '0 4px 14px rgba(59,130,246,0.5)', zIndex: 999 }}
+                    onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
                 >
                     <i className="fas fa-headset"></i>
                 </button>

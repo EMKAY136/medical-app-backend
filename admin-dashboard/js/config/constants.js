@@ -1,7 +1,7 @@
 const USE_LOCAL = false;
 
 const BASE_URL = USE_LOCAL
-    ? 'http://172.16.60.226:5000'
+    ? 'http://198.168.43.233:5000'
     : 'https://medical-app-backend-production-93f7.up.railway.app';
 
 const CONFIG = {
