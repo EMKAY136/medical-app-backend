@@ -14,13 +14,14 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     const messageInputRef = useRef(null);
     const activeConversationRef = useRef(null);
     const lastMessageCountRef = useRef(0);
+    // ✅ FIX 1: track send in a ref too so finally block always fires
+    const sendingRef = useRef(false);
 
     const getHeaders = () => ({
         'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
         'Content-Type': 'application/json',
     });
 
-    // Keep ref in sync with state
     useEffect(() => {
         activeConversationRef.current = activeConversation;
     }, [activeConversation]);
@@ -49,7 +50,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     }, [selectedPatient]);
 
-    // ── Polling — single stable interval ─────────────────────────────────────
+    // ── Polling ───────────────────────────────────────────────────────────────
     useEffect(() => {
         const interval = setInterval(() => {
             const conv = activeConversationRef.current;
@@ -66,7 +67,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     // ── Support status ────────────────────────────────────────────────────────
     const loadSupportStatus = async () => {
         try {
-            // Use patient API for status (publicly available)
             const response = await fetch(`${CONFIG.API_BASE_URL}/api/support/status`, {
                 headers: getHeaders(),
             });
@@ -78,8 +78,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     };
 
-    // ── Admin: load sidebar conversation list ─────────────────────────────────
-    // Reads from ADMIN server — lists all patients who sent messages
+    // ── Admin: sidebar list ───────────────────────────────────────────────────
     const loadActiveChats = async (silent = false) => {
         if (!isAdmin) return;
         try {
@@ -88,10 +87,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                 `${CONFIG.ADMIN_API_URL}/api/support/admin/all-chats`,
                 { headers: getHeaders() }
             );
-            if (!response.ok) {
-                console.error('loadActiveChats failed:', response.status);
-                return;
-            }
+            if (!response.ok) return;
             const data = await response.json();
             if (data.success && data.chats) {
                 const mapped = data.chats.map(chat => ({
@@ -117,7 +113,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     };
 
-    // ── Admin: open a specific patient's chat ─────────────────────────────────
     const startConversationWithPatient = (patient) => {
         const conv = {
             id: `user_${patient.id}`,
@@ -134,8 +129,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         loadAdminChatForUser(patient.id, false);
     };
 
-    // ── Admin: fetch messages for a user ──────────────────────────────────────
-    // KEY FIX: reads from ADMIN server which proxies/stores patient messages
+    // ── Admin: fetch messages for a patient ───────────────────────────────────
     const loadAdminChatForUser = async (userId, silent = false) => {
         if (!userId) return;
         try {
@@ -144,10 +138,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                 `${CONFIG.ADMIN_API_URL}/api/support/admin/chat/${userId}`,
                 { headers: getHeaders() }
             );
-            if (!response.ok) {
-                console.error('loadAdminChatForUser failed:', response.status, 'userId:', userId);
-                return;
-            }
+            if (!response.ok) return;
             const data = await response.json();
             if (data.success) {
                 const formatted = (data.messages || []).map(msg => ({
@@ -159,12 +150,10 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     timestamp: new Date(msg.timestamp || msg.createdAt),
                     status: msg.isRead ? 'read' : 'delivered',
                 }));
-                // Only update if message count changed (avoids flicker)
-                if (formatted.length !== lastMessageCountRef.current) {
-                    lastMessageCountRef.current = formatted.length;
-                    setMessages(formatted);
-                }
-                // Update patient details if provided
+                // ✅ FIX 1: always update — don't gate on count to avoid stale state after send
+                lastMessageCountRef.current = formatted.length;
+                setMessages(formatted);
+
                 if (data.user) {
                     setActiveConversation(prev => prev ? ({
                         ...prev,
@@ -182,7 +171,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     };
 
-    // ── Patient: initialise own conversation ──────────────────────────────────
+    // ── Patient: init conversation ────────────────────────────────────────────
     const loadPatientConversation = async () => {
         try {
             const conv = {
@@ -201,7 +190,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     };
 
-    // ── Patient: fetch own messages from patient server ───────────────────────
+    // ── Patient: fetch own messages ───────────────────────────────────────────
     const loadPatientChatHistory = async (silent = false) => {
         try {
             if (!silent) setLoading(true);
@@ -209,10 +198,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                 `${CONFIG.API_BASE_URL}/api/support/chat/history`,
                 { headers: getHeaders() }
             );
-            if (!response.ok) {
-                console.error('loadPatientChatHistory failed:', response.status);
-                return;
-            }
+            if (!response.ok) return;
             const data = await response.json();
             if (data.success) {
                 const formatted = (data.messages || []).map(msg => ({
@@ -224,10 +210,9 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     timestamp: new Date(msg.timestamp || msg.createdAt),
                     status: msg.isRead ? 'read' : 'delivered',
                 }));
-                if (formatted.length !== lastMessageCountRef.current) {
-                    lastMessageCountRef.current = formatted.length;
-                    setMessages(formatted);
-                }
+                // ✅ FIX 2: always update so admin messages appear immediately
+                lastMessageCountRef.current = formatted.length;
+                setMessages(formatted);
             }
         } catch (e) {
             console.error('Error loading patient chat history:', e);
@@ -236,21 +221,21 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     };
 
-    // ── Helper: identify agent/admin message types ────────────────────────────
     const isAgentMessage = (senderType) => {
         const t = (senderType || '').toLowerCase();
-        return t === 'support_agent' || t === 'admin' || t === 'support_agent';
+        return t === 'support_agent' || t === 'admin';
     };
 
     // ── Send message ──────────────────────────────────────────────────────────
     const sendMessage = async () => {
-        if (!newMessage.trim() || sending) return;
+        // ✅ FIX 3: guard with ref to prevent double-send
+        if (!newMessage.trim() || sendingRef.current) return;
 
         const messageText = newMessage.trim();
         setNewMessage('');
         setSending(true);
+        sendingRef.current = true;
 
-        // Optimistic UI
         const tempMessage = {
             id: `temp_${Date.now()}`,
             senderId: currentUser?.id,
@@ -268,7 +253,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             let response;
 
             if (isAdmin) {
-                // ── Admin reply: POST to ADMIN server ────────────────────────
                 const conv = activeConversationRef.current;
                 if (!conv?.userId) throw new Error('No patient selected');
 
@@ -286,7 +270,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     }
                 );
             } else {
-                // ── Patient message: POST to patient server ───────────────────
                 response = await fetch(
                     `${CONFIG.API_BASE_URL}/api/support/chat/message`,
                     {
@@ -309,14 +292,15 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             const data = await response.json();
 
             if (data.success) {
-                // Confirm temp message
+                // ✅ FIX 4: confirm temp message THEN immediately re-fetch
+                // This replaces the temp with real data so no stale spinner
                 setMessages(prev => prev.map(msg =>
                     msg.id === tempMessage.id
                         ? { ...msg, status: 'delivered', id: data.messageId || msg.id }
                         : msg
                 ));
 
-                // Bot response for patient (only in non-human-agent mode)
+                // Bot response for patient
                 if (!isAdmin && data.botResponse) {
                     setTimeout(() => {
                         setMessages(prev => [...prev, {
@@ -331,15 +315,16 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     }, 800);
                 }
 
-                // Immediately re-fetch to confirm delivery
+                // ✅ FIX 5: re-fetch immediately after send — reset count so update always fires
                 const conv = activeConversationRef.current;
                 setTimeout(() => {
+                    lastMessageCountRef.current = 0; // force update on next fetch
                     if (isAdmin && conv?.userId) {
                         loadAdminChatForUser(conv.userId, true);
                     } else if (!isAdmin) {
                         loadPatientChatHistory(true);
                     }
-                }, 500);
+                }, 400);
 
             } else {
                 throw new Error(data.message || 'Failed to send message');
@@ -347,12 +332,13 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
 
         } catch (e) {
             console.error('sendMessage error:', e);
-            // Remove failed temp message
             setMessages(prev => prev.filter(msg => msg.id !== tempMessage.id));
             alert('Failed to send: ' + e.message);
         } finally {
+            // ✅ FIX 6: always reset sending state — this is the spinner fix
             setSending(false);
-            messageInputRef.current?.focus();
+            sendingRef.current = false;
+            setTimeout(() => messageInputRef.current?.focus(), 100);
         }
     };
 
@@ -363,7 +349,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         }
     };
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
     const formatMessageTime = (timestamp) => {
         const now = new Date();
         const t = new Date(timestamp);
@@ -403,7 +388,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                 padding: 0,
             }}>
 
-                {/* ── Header ── */}
+                {/* Header */}
                 <div style={{
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                     padding: '14px 20px',
@@ -425,7 +410,9 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                         )}
                         {!isAdmin && supportStatus && (
                             <span style={{ fontSize: '12px', color: supportStatus.isOnline ? '#10b981' : '#f59e0b' }}>
-                                ● {supportStatus.isOnline ? `Online · ${supportStatus.estimatedResponseTime || 'Fast replies'}` : 'Offline'}
+                                ● {supportStatus.isOnline
+                                    ? `Online · ${supportStatus.estimatedResponseTime || 'Fast replies'}`
+                                    : 'Offline'}
                             </span>
                         )}
                     </div>
@@ -437,10 +424,10 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     </button>
                 </div>
 
-                {/* ── Body ── */}
+                {/* Body */}
                 <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
 
-                    {/* ── Admin sidebar: conversation list ── */}
+                    {/* Admin sidebar */}
                     {isAdmin && (
                         <div style={{
                             width: '280px', flexShrink: 0,
@@ -529,7 +516,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                         </div>
                     )}
 
-                    {/* ── Chat area ── */}
+                    {/* Chat area */}
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
                         {activeConversation ? (
                             <>
@@ -563,7 +550,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                                     )}
                                 </div>
 
-                                {/* Messages area */}
+                                {/* Messages */}
                                 <div style={{ flex: 1, overflowY: 'auto', padding: '16px', backgroundColor: '#f9fafb' }}>
                                     {messages.length === 0 && (
                                         <div style={{ textAlign: 'center', color: '#9ca3af', marginTop: '40px', fontSize: '13px' }}>
@@ -598,10 +585,10 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                                                     <div style={{ fontSize: '10px', opacity: 0.6, marginTop: '4px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '3px' }}>
                                                         {formatMessageTime(message.timestamp)}
                                                         {mine && (
-                                                            <span>{
-                                                                message.status === 'sending' ? '🕐' :
-                                                                message.status === 'read'     ? '✓✓' : '✓'
-                                                            }</span>
+                                                            <span>
+                                                                {message.status === 'sending' ? '🕐' :
+                                                                 message.status === 'read' ? '✓✓' : '✓'}
+                                                            </span>
                                                         )}
                                                     </div>
                                                 </div>
@@ -656,7 +643,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                                 </div>
                             </>
                         ) : (
-                            /* No conversation selected */
                             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#9ca3af' }}>
                                 <div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.3 }}>💬</div>
                                 {isAdmin ? (
