@@ -694,26 +694,33 @@ response.put("resultId", savedResult.getId());
         
         return dto;
     }
-
-    private AdminAppointmentDto convertToAdminAppointmentDto(Appointment appointment) {
-        AdminAppointmentDto dto = new AdminAppointmentDto();
-        dto.setId(appointment.getId());
-        dto.setPatientId(appointment.getUser().getId());
-        dto.setPatientName(appointment.getUser().getFirstName() + " " + appointment.getUser().getLastName());
-        dto.setPatientEmail(appointment.getUser().getEmail());
-        dto.setTestType(appointment.getTestType());
-        dto.setAppointmentType(appointment.getAppointmentType());
-        dto.setScheduledDate(appointment.getScheduledDate());
-        dto.setScheduledTime(appointment.getScheduledTime());
-        dto.setStatus(appointment.getStatus().name().toLowerCase());
-        dto.setPriority(appointment.getPriority());
-        dto.setNotes(appointment.getNotes());
-        dto.setDoctorName(appointment.getDoctorName());
-        dto.setDepartment(appointment.getDepartment());
-        dto.setCreatedAt(appointment.getCreatedAt());
-        dto.setUpdatedAt(appointment.getUpdatedAt());
-        return dto;
-    }
+private AdminAppointmentDto convertToAdminAppointmentDto(Appointment appointment) {
+    AdminAppointmentDto dto = new AdminAppointmentDto();
+    dto.setId(appointment.getId());
+    dto.setPatientId(appointment.getUser().getId());
+    dto.setPatientName(appointment.getUser().getFirstName() + " " + appointment.getUser().getLastName());
+    dto.setPatientEmail(appointment.getUser().getEmail());
+    dto.setTestType(appointment.getTestType());
+    dto.setAppointmentType(appointment.getAppointmentType());
+    dto.setAppointmentDate(appointment.getAppointmentDate());   // ✅ fixes time display
+    dto.setScheduledDate(appointment.getScheduledDate());
+    dto.setScheduledTime(appointment.getScheduledTime());
+    dto.setStatus(appointment.getStatus().name().toLowerCase());
+    dto.setPriority(appointment.getPriority());
+    dto.setNotes(appointment.getNotes());
+    dto.setDoctorName(appointment.getDoctorName());
+    dto.setDepartment(appointment.getDepartment());
+    dto.setPrice(appointment.getPrice());                        // ✅ fixes price display
+    dto.setPaymentStatus(
+        appointment.getPaymentStatus() != null
+            ? appointment.getPaymentStatus().name()
+            : "UNPAID"
+    );                                                           // ✅ fixes payment badge
+    dto.setPaymentMethod(appointment.getPaymentMethod());
+    dto.setCreatedAt(appointment.getCreatedAt());
+    dto.setUpdatedAt(appointment.getUpdatedAt());
+    return dto;
+}
 
     private AdminTestResultDto convertToAdminTestResultDto(Result result) {
         AdminTestResultDto dto = new AdminTestResultDto();
