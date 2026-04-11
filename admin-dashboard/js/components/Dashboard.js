@@ -13,50 +13,28 @@ const MedicalAdminDashboard = () => {
     const [selectedPatient, setSelectedPatient]   = useState(null);
     const [searchQuery, setSearchQuery]           = useState('');
     const [notification, setNotification]         = useState(null);
-    const [showNotificationForm, setShowNotificationForm]     = useState(false);
+    const [showNotificationForm, setShowNotificationForm]         = useState(false);
     const [showAutoNotificationForm, setShowAutoNotificationForm] = useState(false);
     const [notificationTab, setNotificationTab]   = useState('sent');
+    const [validatingToken, setValidatingToken]   = useState(true);
 
     // Support Chat
-    const [showSupportChat, setShowSupportChat]     = useState(false);
+    const [showSupportChat, setShowSupportChat]       = useState(false);
     const [supportChatPatient, setSupportChatPatient] = useState(null);
 
-    const [formData, setFormData] = useState({ recipientId: '', title: '', message: '', type: 'appointment', sendToAll: false });
-    const [autoFormData, setAutoFormData] = useState({ trigger: 'appointment_scheduled', title: '', message: '', type: 'appointment', enabled: true, delayMinutes: 0 });
+    const [formData, setFormData] = useState({
+        recipientId: '', title: '', message: '', type: 'appointment', sendToAll: false,
+    });
+    const [autoFormData, setAutoFormData] = useState({
+        trigger: 'appointment_scheduled', title: '', message: '',
+        type: 'appointment', enabled: true, delayMinutes: 0,
+    });
 
     const [stats, setStats] = useState({
         totalPatients: 0, todayAppointments: 0, pendingTests: 0,
         completedReports: 0, totalNotifications: 0, activeAutoRules: 0,
         pendingPayments: 0, missedAppointments: 0,
     });
-
-    // ── Init ─────────────────────────────────────────────────────────────────
-    useEffect(() => {
-        const token = localStorage.getItem('authToken');
-        if (token) { setIsAuthenticated(true); loadDashboardData(); }
-    }, []);
-
-    useEffect(() => {
-        if (patients.length > 0 || appointments.length > 0 || testResults.length > 0) loadStats();
-    }, [patients, appointments, testResults, notifications, autoNotifications]);
-
-    // Expose globals for WebSocket callbacks
-    useEffect(() => {
-        if (isAuthenticated && window.AdminWebSocketClient) {
-            const wsClient = new window.AdminWebSocketClient();
-            wsClient.connect();
-            window.loadAppointments     = loadAppointments;
-            window.loadPatients         = loadPatients;
-            window.loadTestResults      = loadTestResults;
-            window.loadStats            = loadStats;
-            window.showNotificationAlert = showNotificationAlert;
-            return () => {
-                wsClient.disconnect();
-                ['loadAppointments','loadPatients','loadTestResults','loadStats','showNotificationAlert']
-                    .forEach(k => delete window[k]);
-            };
-        }
-    }, [isAuthenticated]);
 
     // ── Helpers ──────────────────────────────────────────────────────────────
     const showNotificationAlert = (message, type = 'success') => {
@@ -66,16 +44,119 @@ const MedicalAdminDashboard = () => {
 
     const parseDate = (v) => {
         if (!v) return null;
-        if (Array.isArray(v)) { const [yr, mo, dy, hr = 0, mn = 0] = v; return new Date(yr, mo - 1, dy, hr, mn); }
-        const d = new Date(v); return isNaN(d.getTime()) ? null : d;
+        if (Array.isArray(v)) {
+            const [yr, mo, dy, hr = 0, mn = 0] = v;
+            return new Date(yr, mo - 1, dy, hr, mn);
+        }
+        const s = String(v).trim();
+        // Treat bare ISO strings as local time (no UTC shift)
+        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !s.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(s)) {
+            const [datePart, timePart] = s.split('T');
+            const [yr, mo, dy] = datePart.split('-').map(Number);
+            const [hr, mn] = timePart.split(':').map(Number);
+            return new Date(yr, mo - 1, dy, hr, mn);
+        }
+        const d = new Date(v);
+        return isNaN(d.getTime()) ? null : d;
     };
+
+    // ── Token validation ─────────────────────────────────────────────────────
+    const validateTokenAndLoad = async (token) => {
+        try {
+            const res = await fetch(
+                `${CONFIG.ADMIN_API_URL}/api/admin/patients?page=0&size=1`,
+                { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+            );
+            if (res.ok) {
+                setIsAuthenticated(true);
+                loadDashboardData();
+            } else {
+                // Token invalid or expired — force re-login
+                localStorage.removeItem('authToken');
+                localStorage.removeItem('user_info');
+                setIsAuthenticated(false);
+            }
+        } catch {
+            // Network error — safer to force login
+            localStorage.removeItem('authToken');
+            setIsAuthenticated(false);
+        } finally {
+            setValidatingToken(false);
+        }
+    };
+
+    // ── Init: validate token first, then load ────────────────────────────────
+    useEffect(() => {
+        const token = localStorage.getItem('authToken');
+        if (token) {
+            validateTokenAndLoad(token);
+        } else {
+            setValidatingToken(false);
+        }
+    }, []);
+
+    // ── Auto-refresh intervals (only when authenticated) ─────────────────────
+    useEffect(() => {
+        if (!isAuthenticated) return;
+
+        // Appointments refresh every 10 seconds (changes most frequently)
+        const fastInterval = setInterval(() => {
+            if (localStorage.getItem('authToken')) {
+                loadAppointments();
+                loadNotifications();
+            }
+        }, 10000);
+
+        // Patients + results refresh every 60 seconds
+        const slowInterval = setInterval(() => {
+            if (localStorage.getItem('authToken')) {
+                loadPatients();
+                loadTestResults();
+            }
+        }, 60000);
+
+        return () => {
+            clearInterval(fastInterval);
+            clearInterval(slowInterval);
+        };
+    }, [isAuthenticated]);
+
+    // ── Expose globals for WebSocket callbacks ───────────────────────────────
+    useEffect(() => {
+        if (isAuthenticated && window.AdminWebSocketClient) {
+            const wsClient = new window.AdminWebSocketClient();
+            wsClient.connect();
+            window.loadAppointments      = loadAppointments;
+            window.loadPatients          = loadPatients;
+            window.loadTestResults       = loadTestResults;
+            window.loadStats             = loadStats;
+            window.showNotificationAlert = showNotificationAlert;
+            return () => {
+                wsClient.disconnect();
+                ['loadAppointments', 'loadPatients', 'loadTestResults', 'loadStats', 'showNotificationAlert']
+                    .forEach(k => delete window[k]);
+            };
+        }
+    }, [isAuthenticated]);
+
+    // ── Recalculate stats whenever data changes ──────────────────────────────
+    useEffect(() => {
+        if (patients.length > 0 || appointments.length > 0 || testResults.length > 0) {
+            loadStats();
+        }
+    }, [patients, appointments, testResults, notifications, autoNotifications]);
 
     // ── Data loaders ─────────────────────────────────────────────────────────
     const loadDashboardData = async () => {
         setLoading(true);
         try {
             await loadPatients();
-            await Promise.all([loadAppointments(), loadTestResults(), loadNotifications(), loadAutoNotifications()]);
+            await Promise.all([
+                loadAppointments(),
+                loadTestResults(),
+                loadNotifications(),
+                loadAutoNotifications(),
+            ]);
         } catch (err) {
             showNotificationAlert('Error loading dashboard data', 'error');
         } finally {
@@ -86,30 +167,32 @@ const MedicalAdminDashboard = () => {
     const loadPatients = async () => {
         try {
             const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/patients?page=0&size=100`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
+            const res = await fetch(
+                `${CONFIG.ADMIN_API_URL}/api/admin/patients?page=0&size=100`,
+                { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+            );
+            if (res.status === 401) { handleLogout(); return; }
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             setPatients(data.patients && Array.isArray(data.patients) ? data.patients : []);
         } catch (err) {
             console.error('Error loading patients:', err);
-            showNotificationAlert('Error loading patients', 'error');
         }
     };
 
     const loadAppointments = async () => {
         try {
             const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/appointments?page=0&size=200`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
+            const res = await fetch(
+                `${CONFIG.ADMIN_API_URL}/api/admin/appointments?page=0&size=200`,
+                { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+            );
+            if (res.status === 401) { handleLogout(); return; }
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             setAppointments(data.appointments && Array.isArray(data.appointments) ? data.appointments : []);
         } catch (err) {
             console.error('Error loading appointments:', err);
-            showNotificationAlert('Error loading appointments', 'error');
         }
     };
 
@@ -125,27 +208,38 @@ const MedicalAdminDashboard = () => {
     const loadNotifications = async () => {
         try {
             const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/notifications`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
-            if (res.ok) { const data = await res.json(); setNotifications(data.notifications || []); }
-        } catch (err) { console.error('Error loading notifications:', err); }
+            const res = await fetch(
+                `${CONFIG.ADMIN_API_URL}/api/admin/notifications`,
+                { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+            );
+            if (res.ok) {
+                const data = await res.json();
+                setNotifications(data.notifications || []);
+            }
+        } catch (err) {
+            console.error('Error loading notifications:', err);
+        }
     };
 
     const loadAutoNotifications = async () => {
         try {
             const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
-            if (res.ok) { const data = await res.json(); setAutoNotifications(data.autoNotifications || []); }
-        } catch (err) { console.error('Error loading auto-notifications:', err); }
+            const res = await fetch(
+                `${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications`,
+                { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+            );
+            if (res.ok) {
+                const data = await res.json();
+                setAutoNotifications(data.autoNotifications || []);
+            }
+        } catch (err) {
+            console.error('Error loading auto-notifications:', err);
+        }
     };
 
     const loadStats = () => {
         try {
             const today = new Date().toDateString();
-            const now   = new Date();
 
             const todayApts = appointments.filter(apt => {
                 const d = parseDate(apt.appointmentDate || apt.scheduledDate || apt.date || apt.createdAt);
@@ -160,15 +254,14 @@ const MedicalAdminDashboard = () => {
                 ['completed', 'normal'].includes((r.status || '').toLowerCase())
             ).length;
 
-            // NEW stats
             const pendingPayments = appointments.filter(apt =>
                 (apt.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION'
             ).length;
 
-           // CORRECT — only count what's explicitly marked MISSED in the DB
-const missedAppointments = appointments.filter(apt =>
-    (apt.status || '').toUpperCase() === 'MISSED'
-).length;
+            // Only count explicitly MISSED from backend
+            const missedAppointments = appointments.filter(apt =>
+                (apt.status || '').toUpperCase() === 'MISSED'
+            ).length;
 
             setStats({
                 totalPatients: patients.length,
@@ -180,17 +273,26 @@ const missedAppointments = appointments.filter(apt =>
                 pendingPayments,
                 missedAppointments,
             });
-        } catch (err) { console.error('Error calculating stats:', err); }
+        } catch (err) {
+            console.error('Error calculating stats:', err);
+        }
     };
 
     // ── Actions ──────────────────────────────────────────────────────────────
-    const handleLoginSuccess  = () => { setIsAuthenticated(true); loadDashboardData(); };
-    const handleLogout        = () => {
+    const handleLoginSuccess = () => {
+        setIsAuthenticated(true);
+        loadDashboardData();
+    };
+
+    const handleLogout = () => {
         localStorage.removeItem('authToken');
         localStorage.removeItem('user_info');
         setIsAuthenticated(false);
-        setPatients([]); setAppointments([]); setTestResults([]);
-        setNotifications([]); setAutoNotifications([]);
+        setPatients([]);
+        setAppointments([]);
+        setTestResults([]);
+        setNotifications([]);
+        setAutoNotifications([]);
     };
 
     const handleUpdateAppointment = async (appointmentId, newStatus) => {
@@ -212,6 +314,7 @@ const missedAppointments = appointments.filter(apt =>
         try {
             const hasFiles = resultData.attachments && resultData.attachments.length > 0;
             let response;
+
             if (hasFiles) {
                 const fd = new FormData();
                 fd.append('patientId', resultData.patientId);
@@ -224,21 +327,23 @@ const missedAppointments = appointments.filter(apt =>
                 fd.append('testDate', resultData.testDate || new Date().toISOString());
                 if (resultData.appointmentId) fd.append('appointmentId', resultData.appointmentId);
                 fd.append('markCompleted', resultData.markAppointmentCompleted || false);
-                const att = resultData.attachments[0];
-                const b64 = att.data.split(',')[1];
+                const att   = resultData.attachments[0];
+                const b64   = att.data.split(',')[1];
                 const bytes = atob(b64);
-                const arr = new Uint8Array(bytes.length);
+                const arr   = new Uint8Array(bytes.length);
                 for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
                 fd.append('file', new File([new Blob([arr], { type: att.type })], att.name, { type: att.type }));
-                const token = localStorage.getItem('authToken');
-                const fetchRes = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/upload-result-with-file`, {
-                    method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd
-                });
+                const token    = localStorage.getItem('authToken');
+                const fetchRes = await fetch(
+                    `${CONFIG.ADMIN_API_URL}/api/admin/upload-result-with-file`,
+                    { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd }
+                );
                 if (!fetchRes.ok) throw new Error(`Server returned ${fetchRes.status}`);
                 response = await fetchRes.json();
             } else {
                 response = await ApiService.addTestResult(resultData);
             }
+
             if (response.success) {
                 showNotificationAlert('Test result added successfully!');
                 setShowModal(null);
@@ -252,8 +357,12 @@ const missedAppointments = appointments.filter(apt =>
     };
 
     const handleSendNotification = async () => {
-        if (!formData.title.trim() || !formData.message.trim()) { showNotificationAlert('Fill in all fields', 'error'); return; }
-        if (!formData.sendToAll && !formData.recipientId) { showNotificationAlert('Select a patient or "Send to All"', 'error'); return; }
+        if (!formData.title.trim() || !formData.message.trim()) {
+            showNotificationAlert('Fill in all fields', 'error'); return;
+        }
+        if (!formData.sendToAll && !formData.recipientId) {
+            showNotificationAlert('Select a patient or "Send to All"', 'error'); return;
+        }
         setLoading(true);
         try {
             const token    = localStorage.getItem('authToken');
@@ -273,13 +382,20 @@ const missedAppointments = appointments.filter(apt =>
                 setFormData({ recipientId: '', title: '', message: '', type: 'appointment', sendToAll: false });
                 setShowNotificationForm(false);
                 loadNotifications();
-            } else { showNotificationAlert('Failed to send notification', 'error'); }
-        } catch (err) { showNotificationAlert('Error sending notification', 'error'); }
-        finally { setLoading(false); }
+            } else {
+                showNotificationAlert('Failed to send notification', 'error');
+            }
+        } catch (err) {
+            showNotificationAlert('Error sending notification', 'error');
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleCreateAutoNotification = async () => {
-        if (!autoFormData.title.trim() || !autoFormData.message.trim()) { showNotificationAlert('Fill in all fields', 'error'); return; }
+        if (!autoFormData.title.trim() || !autoFormData.message.trim()) {
+            showNotificationAlert('Fill in all fields', 'error'); return;
+        }
         setLoading(true);
         try {
             const token = localStorage.getItem('authToken');
@@ -293,18 +409,31 @@ const missedAppointments = appointments.filter(apt =>
                 setAutoFormData({ trigger: 'appointment_scheduled', title: '', message: '', type: 'appointment', enabled: true, delayMinutes: 0 });
                 setShowAutoNotificationForm(false);
                 loadAutoNotifications();
-            } else { showNotificationAlert('Failed to create auto-notification', 'error'); }
-        } catch (err) { showNotificationAlert('Error creating auto-notification', 'error'); }
-        finally { setLoading(false); }
+            } else {
+                showNotificationAlert('Failed to create auto-notification', 'error');
+            }
+        } catch (err) {
+            showNotificationAlert('Error creating auto-notification', 'error');
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleDeleteNotification = async (id) => {
         if (!window.confirm('Delete this notification?')) return;
         try {
             const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/notifications/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
-            if (res.ok) { setNotifications(notifications.filter(n => n.id !== id)); showNotificationAlert('Notification deleted'); }
-        } catch (err) { console.error(err); }
+            const res = await fetch(
+                `${CONFIG.ADMIN_API_URL}/api/admin/notifications/${id}`,
+                { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (res.ok) {
+                setNotifications(notifications.filter(n => n.id !== id));
+                showNotificationAlert('Notification deleted');
+            }
+        } catch (err) {
+            console.error(err);
+        }
     };
 
     const handleToggleAutoNotification = async (id, current) => {
@@ -316,16 +445,26 @@ const missedAppointments = appointments.filter(apt =>
                 body: JSON.stringify({ enabled: !current }),
             });
             if (res.ok) loadAutoNotifications();
-        } catch (err) { console.error(err); }
+        } catch (err) {
+            console.error(err);
+        }
     };
 
     const handleDeleteAutoNotification = async (id) => {
         if (!window.confirm('Delete this auto-notification?')) return;
         try {
             const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
-            if (res.ok) { setAutoNotifications(autoNotifications.filter(n => n.id !== id)); showNotificationAlert('Auto-notification deleted'); }
-        } catch (err) { console.error(err); }
+            const res = await fetch(
+                `${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications/${id}`,
+                { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (res.ok) {
+                setAutoNotifications(autoNotifications.filter(n => n.id !== id));
+                showNotificationAlert('Auto-notification deleted');
+            }
+        } catch (err) {
+            console.error(err);
+        }
     };
 
     const filteredPatients = patients.filter(p => {
@@ -344,15 +483,38 @@ const missedAppointments = appointments.filter(apt =>
         appointment_missed:    'Appointment Missed',
     }[t] || t);
 
-    const getTypeIcon = (t) => ({ appointment: '📅', results: '📊', alert: '⚠️', reminder: '🔔', payment: '💰' }[t] || '📬');
+    const getTypeIcon = (t) => ({
+        appointment: '📅', results: '📊', alert: '⚠️', reminder: '🔔', payment: '💰',
+    }[t] || '📬');
 
-    const getCurrentUser = () => { try { return JSON.parse(localStorage.getItem('user_info') || '{}'); } catch { return {}; } };
+    const getCurrentUser = () => {
+        try { return JSON.parse(localStorage.getItem('user_info') || '{}'); }
+        catch { return {}; }
+    };
 
     // ── Guards ───────────────────────────────────────────────────────────────
-    if (!isAuthenticated) return React.createElement(Login, { onLoginSuccess: handleLoginSuccess });
-    if (loading && patients.length === 0) return (
-        <div className="loading"><div className="spinner"></div><p>Loading dashboard...</p></div>
-    );
+    // Show nothing while validating token (avoids flash of login page)
+    if (validatingToken) {
+        return (
+            <div className="loading">
+                <div className="spinner"></div>
+                <p>Verifying session...</p>
+            </div>
+        );
+    }
+
+    if (!isAuthenticated) {
+        return React.createElement(Login, { onLoginSuccess: handleLoginSuccess });
+    }
+
+    if (loading && patients.length === 0) {
+        return (
+            <div className="loading">
+                <div className="spinner"></div>
+                <p>Loading dashboard...</p>
+            </div>
+        );
+    }
 
     // ── Render ───────────────────────────────────────────────────────────────
     return (
@@ -365,27 +527,22 @@ const missedAppointments = appointments.filter(apt =>
                 {notification && (
                     <div className={`alert alert-${notification.type}`}>
                         <i className={`fas ${notification.type === 'success' ? 'fa-check-circle' : 'fa-exclamation-triangle'}`}></i>
-                        {notification.message}
+                        {' '}{notification.message}
                     </div>
                 )}
 
                 {/* ── DASHBOARD ── */}
                 {currentView === 'dashboard' && (
                     <div>
-                        {/* Extended stats grid */}
                         {React.createElement(StatsGrid, { stats })}
 
                         {/* Pending payments banner */}
                         {stats.pendingPayments > 0 && (
                             <div style={{
-                                margin: '0 20px 20px',
-                                padding: '14px 18px',
-                                background: '#fef3c7',
-                                border: '2px solid #fbbf24',
-                                borderRadius: '10px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between'
+                                margin: '0 20px 20px', padding: '14px 18px',
+                                background: '#fef3c7', border: '2px solid #fbbf24',
+                                borderRadius: '10px', display: 'flex',
+                                alignItems: 'center', justifyContent: 'space-between',
                             }}>
                                 <div style={{ fontWeight: '700', color: '#92400e', fontSize: '15px' }}>
                                     ⏳ {stats.pendingPayments} payment{stats.pendingPayments > 1 ? 's' : ''} awaiting confirmation
@@ -402,14 +559,10 @@ const missedAppointments = appointments.filter(apt =>
                         {/* Missed appointments banner */}
                         {stats.missedAppointments > 0 && (
                             <div style={{
-                                margin: '0 20px 20px',
-                                padding: '14px 18px',
-                                background: '#ffedd5',
-                                border: '2px solid #ea580c',
-                                borderRadius: '10px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between'
+                                margin: '0 20px 20px', padding: '14px 18px',
+                                background: '#ffedd5', border: '2px solid #ea580c',
+                                borderRadius: '10px', display: 'flex',
+                                alignItems: 'center', justifyContent: 'space-between',
                             }}>
                                 <div style={{ fontWeight: '700', color: '#9a3412', fontSize: '15px' }}>
                                     ⚠️ {stats.missedAppointments} missed appointment{stats.missedAppointments > 1 ? 's' : ''}
@@ -426,10 +579,11 @@ const missedAppointments = appointments.filter(apt =>
                         <div className="content-grid">
                             {React.createElement(MainPanel, {
                                 patients: filteredPatients, searchQuery, setSearchQuery,
-                                setSelectedPatient, setShowModal, onUpdateAppointment: handleUpdateAppointment
+                                setSelectedPatient, setShowModal,
+                                onUpdateAppointment: handleUpdateAppointment,
                             })}
                             {React.createElement(SidePanel, {
-                                appointments, setShowModal, onRefresh: loadAppointments
+                                appointments, setShowModal, onRefresh: loadAppointments,
                             })}
                         </div>
                     </div>
@@ -438,16 +592,19 @@ const missedAppointments = appointments.filter(apt =>
                 {/* ── PATIENTS ── */}
                 {currentView === 'patients' && React.createElement(PatientsView, {
                     patients: filteredPatients, searchQuery, setSearchQuery,
-                    setSelectedPatient, setShowModal, onUpdateAppointment: handleUpdateAppointment
+                    setSelectedPatient, setShowModal,
+                    onUpdateAppointment: handleUpdateAppointment,
                 })}
 
                 {/* ── APPOINTMENTS ── */}
                 {currentView === 'appointments' && React.createElement(AppointmentsView, {
-                    appointments, setShowModal, onRefresh: loadAppointments
+                    appointments, setShowModal, onRefresh: loadAppointments,
                 })}
 
                 {/* ── REPORTS ── */}
-                {currentView === 'reports' && React.createElement(ReportsView, { testResults, setShowModal })}
+                {currentView === 'reports' && React.createElement(ReportsView, {
+                    testResults, setShowModal,
+                })}
 
                 {/* ── NOTIFICATIONS ── */}
                 {currentView === 'notifications' && (
@@ -458,7 +615,16 @@ const missedAppointments = appointments.filter(apt =>
 
                         <div style={{ borderBottom: '1px solid #ccc', marginBottom: '20px' }}>
                             {['sent', 'auto'].map(tab => (
-                                <button key={tab} onClick={() => setNotificationTab(tab)} style={{ padding: '10px 20px', borderBottom: notificationTab === tab ? '3px solid #007bff' : 'none', background: 'none', border: 'none', cursor: 'pointer', fontWeight: notificationTab === tab ? 'bold' : 'normal' }}>
+                                <button
+                                    key={tab}
+                                    onClick={() => setNotificationTab(tab)}
+                                    style={{
+                                        padding: '10px 20px',
+                                        borderBottom: notificationTab === tab ? '3px solid #007bff' : 'none',
+                                        background: 'none', border: 'none', cursor: 'pointer',
+                                        fontWeight: notificationTab === tab ? 'bold' : 'normal',
+                                    }}
+                                >
                                     {tab === 'sent' ? 'Send Notifications' : 'Auto Notifications'}
                                 </button>
                             ))}
@@ -466,30 +632,49 @@ const missedAppointments = appointments.filter(apt =>
 
                         {notificationTab === 'sent' && (
                             <div>
-                                <button onClick={() => setShowNotificationForm(!showNotificationForm)} style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginBottom: '20px' }}>
+                                <button
+                                    onClick={() => setShowNotificationForm(!showNotificationForm)}
+                                    style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginBottom: '20px' }}
+                                >
                                     Send New Notification
                                 </button>
 
                                 {showNotificationForm && (
                                     <div style={{ background: '#f5f5f5', padding: '20px', borderRadius: '5px', marginBottom: '20px' }}>
                                         <label style={{ display: 'block', marginBottom: '10px' }}>
-                                            <input type="checkbox" checked={formData.sendToAll} onChange={e => setFormData({ ...formData, sendToAll: e.target.checked })} />
+                                            <input
+                                                type="checkbox"
+                                                checked={formData.sendToAll}
+                                                onChange={e => setFormData({ ...formData, sendToAll: e.target.checked })}
+                                            />
                                             {' '}Send to All Patients
                                         </label>
                                         {!formData.sendToAll && (
                                             <div style={{ marginBottom: '10px' }}>
-                                                <label style={{ display: 'block', marginBottom: '5px' }}>Select Patient ({patients.length} available)</label>
-                                                <select value={formData.recipientId} onChange={e => setFormData({ ...formData, recipientId: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                                <label style={{ display: 'block', marginBottom: '5px' }}>
+                                                    Select Patient ({patients.length} available)
+                                                </label>
+                                                <select
+                                                    value={formData.recipientId}
+                                                    onChange={e => setFormData({ ...formData, recipientId: e.target.value })}
+                                                    style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}
+                                                >
                                                     <option value="">Choose a patient...</option>
                                                     {patients.map(p => (
-                                                        <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.email})</option>
+                                                        <option key={p.id} value={p.id}>
+                                                            {p.firstName} {p.lastName} ({p.email})
+                                                        </option>
                                                     ))}
                                                 </select>
                                             </div>
                                         )}
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Type</label>
-                                            <select value={formData.type} onChange={e => setFormData({ ...formData, type: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                            <select
+                                                value={formData.type}
+                                                onChange={e => setFormData({ ...formData, type: e.target.value })}
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}
+                                            >
                                                 <option value="appointment">Appointment</option>
                                                 <option value="results">Results</option>
                                                 <option value="alert">Alert</option>
@@ -499,16 +684,37 @@ const missedAppointments = appointments.filter(apt =>
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Title</label>
-                                            <input type="text" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} placeholder="Title" maxLength="100" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
+                                            <input
+                                                type="text"
+                                                value={formData.title}
+                                                onChange={e => setFormData({ ...formData, title: e.target.value })}
+                                                placeholder="Title"
+                                                maxLength="100"
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}
+                                            />
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Message</label>
-                                            <textarea value={formData.message} onChange={e => setFormData({ ...formData, message: e.target.value })} placeholder="Message" maxLength="500" rows="4" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
+                                            <textarea
+                                                value={formData.message}
+                                                onChange={e => setFormData({ ...formData, message: e.target.value })}
+                                                placeholder="Message"
+                                                maxLength="500"
+                                                rows="4"
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }}
+                                            />
                                         </div>
-                                        <button onClick={handleSendNotification} disabled={loading} style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}>
+                                        <button
+                                            onClick={handleSendNotification}
+                                            disabled={loading}
+                                            style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}
+                                        >
                                             {loading ? 'Sending...' : 'Send'}
                                         </button>
-                                        <button onClick={() => setShowNotificationForm(false)} style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+                                        <button
+                                            onClick={() => setShowNotificationForm(false)}
+                                            style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
+                                        >
                                             Cancel
                                         </button>
                                     </div>
@@ -516,7 +722,9 @@ const missedAppointments = appointments.filter(apt =>
 
                                 <div style={{ marginTop: '20px' }}>
                                     <h3>Sent Notifications ({notifications.length})</h3>
-                                    {notifications.length === 0 ? <p>No notifications sent</p> : notifications.map(notif => (
+                                    {notifications.length === 0 ? (
+                                        <p>No notifications sent</p>
+                                    ) : notifications.map(notif => (
                                         <div key={notif.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                                                 <div>
@@ -526,7 +734,12 @@ const missedAppointments = appointments.filter(apt =>
                                                         To: {notif.recipientName || 'All Patients'} | {new Date(notif.createdAt).toLocaleString()}
                                                     </p>
                                                 </div>
-                                                <button onClick={() => handleDeleteNotification(notif.id)} style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Delete</button>
+                                                <button
+                                                    onClick={() => handleDeleteNotification(notif.id)}
+                                                    style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
+                                                >
+                                                    Delete
+                                                </button>
                                             </div>
                                         </div>
                                     ))}
@@ -536,7 +749,10 @@ const missedAppointments = appointments.filter(apt =>
 
                         {notificationTab === 'auto' && (
                             <div>
-                                <button onClick={() => setShowAutoNotificationForm(!showAutoNotificationForm)} style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginBottom: '20px' }}>
+                                <button
+                                    onClick={() => setShowAutoNotificationForm(!showAutoNotificationForm)}
+                                    style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginBottom: '20px' }}
+                                >
                                     Create Auto Notification
                                 </button>
 
@@ -544,7 +760,11 @@ const missedAppointments = appointments.filter(apt =>
                                     <div style={{ background: '#f5f5f5', padding: '20px', borderRadius: '5px', marginBottom: '20px' }}>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Trigger Event</label>
-                                            <select value={autoFormData.trigger} onChange={e => setAutoFormData({ ...autoFormData, trigger: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                            <select
+                                                value={autoFormData.trigger}
+                                                onChange={e => setAutoFormData({ ...autoFormData, trigger: e.target.value })}
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}
+                                            >
                                                 <option value="appointment_scheduled">Appointment Scheduled</option>
                                                 <option value="results_ready">Results Ready</option>
                                                 <option value="appointment_reminder">Appointment Reminder</option>
@@ -555,11 +775,21 @@ const missedAppointments = appointments.filter(apt =>
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Delay (minutes)</label>
-                                            <input type="number" value={autoFormData.delayMinutes} onChange={e => setAutoFormData({ ...autoFormData, delayMinutes: parseInt(e.target.value) || 0 })} min="0" max="1440" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
+                                            <input
+                                                type="number"
+                                                value={autoFormData.delayMinutes}
+                                                onChange={e => setAutoFormData({ ...autoFormData, delayMinutes: parseInt(e.target.value) || 0 })}
+                                                min="0" max="1440"
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}
+                                            />
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Type</label>
-                                            <select value={autoFormData.type} onChange={e => setAutoFormData({ ...autoFormData, type: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                            <select
+                                                value={autoFormData.type}
+                                                onChange={e => setAutoFormData({ ...autoFormData, type: e.target.value })}
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}
+                                            >
                                                 <option value="appointment">Appointment</option>
                                                 <option value="results">Results</option>
                                                 <option value="alert">Alert</option>
@@ -569,28 +799,57 @@ const missedAppointments = appointments.filter(apt =>
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Title</label>
-                                            <input type="text" value={autoFormData.title} onChange={e => setAutoFormData({ ...autoFormData, title: e.target.value })} placeholder="Title" maxLength="100" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
+                                            <input
+                                                type="text"
+                                                value={autoFormData.title}
+                                                onChange={e => setAutoFormData({ ...autoFormData, title: e.target.value })}
+                                                placeholder="Title"
+                                                maxLength="100"
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}
+                                            />
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Message</label>
-                                            <textarea value={autoFormData.message} onChange={e => setAutoFormData({ ...autoFormData, message: e.target.value })} placeholder="Message" maxLength="500" rows="4" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
+                                            <textarea
+                                                value={autoFormData.message}
+                                                onChange={e => setAutoFormData({ ...autoFormData, message: e.target.value })}
+                                                placeholder="Message"
+                                                maxLength="500"
+                                                rows="4"
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }}
+                                            />
                                         </div>
-                                        <button onClick={handleCreateAutoNotification} disabled={loading} style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}>
+                                        <button
+                                            onClick={handleCreateAutoNotification}
+                                            disabled={loading}
+                                            style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}
+                                        >
                                             {loading ? 'Creating...' : 'Create'}
                                         </button>
-                                        <button onClick={() => setShowAutoNotificationForm(false)} style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Cancel</button>
+                                        <button
+                                            onClick={() => setShowAutoNotificationForm(false)}
+                                            style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
+                                        >
+                                            Cancel
+                                        </button>
                                     </div>
                                 )}
 
                                 <div style={{ marginTop: '20px' }}>
                                     <h3>Auto Notifications</h3>
-                                    {autoNotifications.length === 0 ? <p>No auto notifications configured</p> : autoNotifications.map(an => (
+                                    {autoNotifications.length === 0 ? (
+                                        <p>No auto notifications configured</p>
+                                    ) : autoNotifications.map(an => (
                                         <div key={an.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                                                 <div style={{ flex: 1 }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
                                                         <h4 style={{ margin: 0, marginRight: '10px' }}>{an.title}</h4>
-                                                        <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '12px', background: an.enabled ? '#d4edda' : '#f8d7da', color: an.enabled ? '#155724' : '#721c24' }}>
+                                                        <span style={{
+                                                            padding: '2px 8px', borderRadius: '12px', fontSize: '12px',
+                                                            background: an.enabled ? '#d4edda' : '#f8d7da',
+                                                            color: an.enabled ? '#155724' : '#721c24',
+                                                        }}>
                                                             {an.enabled ? 'Active' : 'Disabled'}
                                                         </span>
                                                     </div>
@@ -600,10 +859,18 @@ const missedAppointments = appointments.filter(apt =>
                                                     </p>
                                                 </div>
                                                 <div style={{ display: 'flex', gap: '5px' }}>
-                                                    <button onClick={() => handleToggleAutoNotification(an.id, an.enabled)} style={{ padding: '5px 10px', background: an.enabled ? '#ffc107' : '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+                                                    <button
+                                                        onClick={() => handleToggleAutoNotification(an.id, an.enabled)}
+                                                        style={{ padding: '5px 10px', background: an.enabled ? '#ffc107' : '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
+                                                    >
                                                         {an.enabled ? 'Disable' : 'Enable'}
                                                     </button>
-                                                    <button onClick={() => handleDeleteAutoNotification(an.id)} style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Delete</button>
+                                                    <button
+                                                        onClick={() => handleDeleteAutoNotification(an.id)}
+                                                        style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
+                                                    >
+                                                        Delete
+                                                    </button>
                                                 </div>
                                             </div>
                                         </div>
@@ -644,7 +911,15 @@ const missedAppointments = appointments.filter(apt =>
                 <button
                     onClick={() => { setSupportChatPatient(null); setShowSupportChat(true); }}
                     title="Open Patient Support Chat"
-                    style={{ position: 'fixed', bottom: '24px', right: '24px', width: '56px', height: '56px', borderRadius: '50%', backgroundColor: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', boxShadow: '0 4px 14px rgba(59,130,246,0.5)', zIndex: 999 }}
+                    style={{
+                        position: 'fixed', bottom: '24px', right: '24px',
+                        width: '56px', height: '56px', borderRadius: '50%',
+                        backgroundColor: '#3b82f6', color: 'white', border: 'none',
+                        cursor: 'pointer', display: 'flex', alignItems: 'center',
+                        justifyContent: 'center', fontSize: '20px',
+                        boxShadow: '0 4px 14px rgba(59,130,246,0.5)', zIndex: 999,
+                        transition: 'transform 0.15s',
+                    }}
                     onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)'; }}
                     onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
                 >
