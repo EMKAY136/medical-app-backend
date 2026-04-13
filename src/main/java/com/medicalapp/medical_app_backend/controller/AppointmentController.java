@@ -12,6 +12,9 @@ import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.SendTo;
 import com.medicalapp.medical_app_backend.model.AppointmentNotification;
 
+import com.medicalapp.medical_app_backend.entity.Appointment;
+import com.medicalapp.medical_app_backend.repository.AppointmentRepository;
+import java.util.Optional;
 import java.util.List;
 import java.util.Map;
 
@@ -22,6 +25,9 @@ public class AppointmentController {
 
     @Autowired
     private AppointmentService appointmentService;
+
+    @Autowired
+    private AppointmentRepository appointmentRepository;
 
     // ── NEW ──────────────────────────────────────────────────────────────────
     /**
@@ -165,4 +171,36 @@ public class AppointmentController {
             return ResponseEntity.badRequest().body("Error updating appointment status: " + e.getMessage());
         }
     }
+
+    // ── Mark missed (called from mobile) ─────────────────────────────────────
+    @PatchMapping("/{id}/mark-missed")
+    public ResponseEntity<?> markMissed(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        try {
+            Optional<Appointment> aptOpt = appointmentRepository.findById(id);
+            if (aptOpt.isEmpty())
+                return ResponseEntity.badRequest()
+                        .body(Map.of("success", false, "message", "Appointment not found"));
+
+            Appointment apt = aptOpt.get();
+
+            // Idempotent
+            if (apt.getStatus() == Appointment.Status.MISSED)
+                return ResponseEntity.ok(Map.of("success", true, "message", "Already marked missed", "status", "MISSED"));
+
+            apt.setStatus(Appointment.Status.MISSED);
+            apt.setUpdatedAt(java.time.LocalDateTime.now());
+            appointmentRepository.save(apt);
+
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "Appointment marked as missed",
+                    "status",  "MISSED"));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("success", false, "message", e.getMessage()));
+        }
+    }
+
 }

@@ -256,13 +256,8 @@ public class AdminController {
                         "status",  appointment.getStatus().name()));
             }
 
-            // Confirm the date has actually passed
+            // Admin can always mark an appointment missed — no date guard
             LocalDateTime now = LocalDateTime.now();
-            if (appointment.getAppointmentDate() != null && appointment.getAppointmentDate().isAfter(now)) {
-                return ResponseEntity.badRequest().body(Map.of(
-                        "success", false,
-                        "message", "Appointment date has not passed yet — cannot mark as missed"));
-            }
 
             appointment.setStatus(Appointment.Status.MISSED);
             appointment.setUpdatedAt(now);
