@@ -49,6 +49,12 @@ public class AppointmentDto {
     // ── Audit ────────────────────────────────────────────────────────────────
     private LocalDateTime createdAt;
 
+    private String refundStatus;
+private String refundReason;
+private LocalDateTime refundRequestedAt;
+private LocalDateTime refundApprovedAt;
+private String refundApprovedBy;
+
     // ── Constructors ─────────────────────────────────────────────────────────
 
     public AppointmentDto() {}
@@ -104,4 +110,19 @@ public class AppointmentDto {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    public String getRefundStatus() { return refundStatus; }
+public void setRefundStatus(String refundStatus) { this.refundStatus = refundStatus; }
+
+public String getRefundReason() { return refundReason; }
+public void setRefundReason(String refundReason) { this.refundReason = refundReason; }
+
+public LocalDateTime getRefundRequestedAt() { return refundRequestedAt; }
+public void setRefundRequestedAt(LocalDateTime refundRequestedAt) { this.refundRequestedAt = refundRequestedAt; }
+
+public LocalDateTime getRefundApprovedAt() { return refundApprovedAt; }
+public void setRefundApprovedAt(LocalDateTime refundApprovedAt) { this.refundApprovedAt = refundApprovedAt; }
+
+public String getRefundApprovedBy() { return refundApprovedBy; }
+public void setRefundApprovedBy(String refundApprovedBy) { this.refundApprovedBy = refundApprovedBy; }
 }
