@@ -76,6 +76,23 @@ public class Appointment {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt = LocalDateTime.now();
 
+    @Enumerated(EnumType.STRING)
+@Column(name = "refund_status")
+private RefundStatus refundStatus = RefundStatus.NONE;
+
+@Column(name = "refund_reason", columnDefinition = "TEXT")
+private String refundReason;
+
+@Column(name = "refund_requested_at")
+private LocalDateTime refundRequestedAt;
+
+@Column(name = "refund_approved_at")
+private LocalDateTime refundApprovedAt;
+
+@Column(name = "refund_approved_by")
+private String refundApprovedBy;
+
+
     // ────────────────────────────────────────────────────────────────────────
     // Constructors
     // ────────────────────────────────────────────────────────────────────────
@@ -103,6 +120,10 @@ public class Appointment {
             this.appointmentDate = LocalDateTime.of(scheduledDate, scheduledTime);
         }
     }
+
+    public enum RefundStatus {
+    NONE, REQUESTED, APPROVED, REJECTED
+}
 
     // ────────────────────────────────────────────────────────────────────────
     // Getters & Setters
@@ -222,6 +243,22 @@ public class Appointment {
 
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+
+
+    public RefundStatus getRefundStatus() { return refundStatus; }
+public void setRefundStatus(RefundStatus refundStatus) { this.refundStatus = refundStatus; }
+
+public String getRefundReason() { return refundReason; }
+public void setRefundReason(String refundReason) { this.refundReason = refundReason; }
+
+public LocalDateTime getRefundRequestedAt() { return refundRequestedAt; }
+public void setRefundRequestedAt(LocalDateTime refundRequestedAt) { this.refundRequestedAt = refundRequestedAt; }
+
+public LocalDateTime getRefundApprovedAt() { return refundApprovedAt; }
+public void setRefundApprovedAt(LocalDateTime refundApprovedAt) { this.refundApprovedAt = refundApprovedAt; }
+
+public String getRefundApprovedBy() { return refundApprovedBy; }
+public void setRefundApprovedBy(String refundApprovedBy) { this.refundApprovedBy = refundApprovedBy; }
 
     // ────────────────────────────────────────────────────────────────────────
     // JPA lifecycle

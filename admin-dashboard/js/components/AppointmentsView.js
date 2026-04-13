@@ -10,10 +10,21 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     const [editingGroup, setEditingGroup] = useState(null);
     const [editTests, setEditTests] = useState([]);
     const [savingTests, setSavingTests] = useState(false);
-    const [rescheduleModal, setRescheduleModal] = useState(null); // group being rescheduled
+    const [rescheduleModal, setRescheduleModal] = useState(null);
     const [rescheduleDate, setRescheduleDate] = useState('');
     const [rescheduleTime, setRescheduleTime] = useState('');
     const [rescheduling, setRescheduling] = useState(false);
+
+    // ── Refund section search states ─────────────────────────────────────────
+    const [refundSearch, setRefundSearch] = useState('');
+    const [pendingSearch, setPendingSearch] = useState('');
+    const [missedSearch, setMissedSearch] = useState('');
+    const [rescheduledSearch, setRescheduledSearch] = useState('');
+
+    // ── Refund process modal ─────────────────────────────────────────────────
+    const [refundModal, setRefundModal] = useState(null); // { group, action: 'APPROVED'|'REJECTED' }
+    const [processingRefund, setProcessingRefund] = useState(false);
+    const [refundSubFilter, setRefundSubFilter] = useState('all');
 
     // ── Date parser ──────────────────────────────────────────────────────────
     const parseDate = (v) => {
@@ -70,6 +81,15 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         }
     };
 
+    const getRefundBadge = (rs) => {
+        switch ((rs || '').toUpperCase()) {
+            case 'REQUESTED': return { label: 'Refund Requested', bg: '#fef3c7', color: '#92400e', icon: '🔄' };
+            case 'APPROVED':  return { label: 'Refund Approved',  bg: '#d1fae5', color: '#065f46', icon: '✅' };
+            case 'REJECTED':  return { label: 'Refund Rejected',  bg: '#fee2e2', color: '#991b1b', icon: '❌' };
+            default:          return null;
+        }
+    };
+
     // ── Group same-patient same-datetime appointments ─────────────────────────
     const groupAppointments = (list) => {
         const groups = {};
@@ -86,11 +106,24 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                     key, patientId: apt.patientId, patientName: apt.patientName,
                     appointmentDate: dateVal, status: apt.status,
                     paymentStatus: apt.paymentStatus, paymentMethod: apt.paymentMethod,
+                    refundStatus: apt.refundStatus,
+                    refundReason: apt.refundReason,
+                    refundRequestedAt: apt.refundRequestedAt,
                     appointments: [], totalPrice: 0,
                 };
             }
             groups[key].appointments.push(apt);
             groups[key].totalPrice += parsePrice(apt.price);
+
+            // Bubble up refund status from any appointment in the group
+            const refundStatuses = groups[key].appointments.map(a => (a.refundStatus || '').toUpperCase());
+            if (refundStatuses.includes('REQUESTED')) groups[key].refundStatus = 'REQUESTED';
+            else if (refundStatuses.includes('APPROVED')) groups[key].refundStatus = 'APPROVED';
+            else if (refundStatuses.includes('REJECTED')) groups[key].refundStatus = 'REJECTED';
+
+            // Bubble up refund reason
+            const withReason = groups[key].appointments.find(a => a.refundReason);
+            if (withReason) groups[key].refundReason = withReason.refundReason;
 
             const statuses = groups[key].appointments.map(a => (a.status || '').toUpperCase());
             if (statuses.includes('SCHEDULED'))         groups[key].status = 'SCHEDULED';
@@ -108,13 +141,19 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         });
     };
 
+    // ── Search helper ────────────────────────────────────────────────────────
+    const filterByName = (groups, query) => {
+        if (!query.trim()) return groups;
+        const q = query.toLowerCase();
+        return groups.filter(g => (g.patientName || '').toLowerCase().includes(q));
+    };
+
     // ── Computed sections ────────────────────────────────────────────────────
     const pendingPayments = useMemo(() =>
         groupAppointments(appointments.filter(a => (a.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION')),
         [appointments]
     );
 
-    // Paid + missed but NOT yet rescheduled
     const paidButMissed = useMemo(() =>
         groupAppointments(appointments.filter(a =>
             (a.status || '').toUpperCase() === 'MISSED' &&
@@ -124,11 +163,27 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         [appointments]
     );
 
-    // Rescheduled (previously paid+missed, now given new slot)
     const rescheduledGroups = useMemo(() =>
         groupAppointments(appointments.filter(a =>
             (a.status || '').toUpperCase() === 'RESCHEDULED' ||
             (a.rescheduleStatus || '').toUpperCase() === 'RESCHEDULED'
+        )),
+        [appointments]
+    );
+
+    // ── Refund requests section ──────────────────────────────────────────────
+    const refundGroups = useMemo(() =>
+        groupAppointments(appointments.filter(a =>
+            (a.refundStatus || '').toUpperCase() === 'REQUESTED' ||
+            (a.refundStatus || '').toUpperCase() === 'APPROVED' ||
+            (a.refundStatus || '').toUpperCase() === 'REJECTED'
+        )),
+        [appointments]
+    );
+
+    const pendingRefundGroups = useMemo(() =>
+        groupAppointments(appointments.filter(a =>
+            (a.refundStatus || '').toUpperCase() === 'REQUESTED'
         )),
         [appointments]
     );
@@ -159,10 +214,15 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     }, [appointments, filterStatus, filterPayment, filterDate, searchName]);
 
     // ── API helpers ──────────────────────────────────────────────────────────
-    const apiPatch = async (url) => {
+    const apiPatch = async (url, body) => {
         const token = localStorage.getItem('authToken');
         const res = await fetch(`${CONFIG.ADMIN_API_URL}${url}`, {
-            method: 'PATCH', headers: { Authorization: `Bearer ${token}` },
+            method: 'PATCH',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                ...(body ? { 'Content-Type': 'application/json' } : {}),
+            },
+            ...(body ? { body: JSON.stringify(body) } : {}),
         });
         return res.json();
     };
@@ -215,7 +275,33 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         for (const apt of group.appointments) await handleUpdateStatus(apt.id, newStatus);
     };
 
-    // ── Reschedule: set new date/time for all apts in group ───────────────────
+    // ── Process refund (approve / reject) ────────────────────────────────────
+    const handleProcessRefund = async (group, action) => {
+        setProcessingRefund(true);
+        try {
+            for (const apt of group.appointments) {
+                const data = await apiPatch(
+                    `/api/appointments/${apt.id}/process-refund`,
+                    { action }
+                );
+                if (!data.success) {
+                    alert(data.message || `Failed to process refund for appointment #${apt.id}`);
+                    setProcessingRefund(false);
+                    return;
+                }
+            }
+            window.showNotificationAlert && window.showNotificationAlert(
+                `Refund ${action === 'APPROVED' ? 'approved ✅' : 'rejected'} for ${group.patientName}`
+            );
+            setRefundModal(null);
+            onRefresh && onRefresh();
+        } catch (err) {
+            alert('Network error: ' + err.message);
+        } finally {
+            setProcessingRefund(false);
+        }
+    };
+
     const handleReschedule = async () => {
         if (!rescheduleDate || !rescheduleTime) { alert('Please select both a date and time.'); return; }
         setRescheduling(true);
@@ -264,6 +350,36 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         finally { setSavingTests(false); }
     };
 
+    // ── Search bar component ─────────────────────────────────────────────────
+    const SearchBar = ({ value, onChange, placeholder = 'Search by patient name...' }) => (
+        <div style={{
+            display: 'flex', alignItems: 'center', gap: '8px',
+            background: '#f9fafb', border: '1.5px solid #e5e7eb',
+            borderRadius: '8px', padding: '7px 12px', marginBottom: '14px',
+        }}>
+            <span style={{ fontSize: '14px', color: '#9ca3af' }}>🔍</span>
+            <input
+                type="text"
+                placeholder={placeholder}
+                value={value}
+                onChange={e => onChange(e.target.value)}
+                style={{
+                    flex: 1, border: 'none', background: 'transparent',
+                    fontSize: '13px', color: '#374151', outline: 'none',
+                }}
+            />
+            {value && (
+                <button
+                    onClick={() => onChange('')}
+                    style={{
+                        border: 'none', background: 'none', cursor: 'pointer',
+                        color: '#9ca3af', fontSize: '16px', lineHeight: 1, padding: 0,
+                    }}
+                >×</button>
+            )}
+        </div>
+    );
+
     // ── Section pill ─────────────────────────────────────────────────────────
     const SectionPill = ({ id, label, count, alertCount }) => (
         <button
@@ -302,6 +418,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     const GroupCard = ({ group, showRescheduleBtn = false }) => {
         const sb = getStatusBadge(group.status);
         const pb = getPaymentBadge(group.paymentStatus);
+        const rb = getRefundBadge(group.refundStatus);
         const aptDate = parseDate(group.appointmentDate);
         const isPast = aptDate && aptDate < new Date();
         const isSchd = (group.status || '').toUpperCase() === 'SCHEDULED';
@@ -310,14 +427,25 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         const isMissedPaid =
             (group.status || '').toUpperCase() === 'MISSED' &&
             (group.paymentStatus || '').toUpperCase() === 'PAID';
+        const isRefundRequested = (group.refundStatus || '').toUpperCase() === 'REQUESTED';
         const isGroupLoading = group.appointments.some(a =>
             actionLoading === a.id + '-pay' ||
             actionLoading === a.id + '-status' ||
             actionLoading === a.id + '-miss'
         );
 
-        const borderColor = isPending ? '#fbbf24' : isMissedPaid ? '#f97316' : isRescheduled ? '#8b5cf6' : '#e5e7eb';
-        const shadow = isPending ? '0 2px 8px rgba(251,191,36,0.15)'
+        // Show refund button: paid + (scheduled or missed) + no refund yet
+        const isPaid = (group.paymentStatus || '').toUpperCase() === 'PAID';
+        const noRefundYet = !group.refundStatus || group.refundStatus === 'NONE';
+        const canRefund = isPaid && ((group.status || '').toUpperCase() === 'SCHEDULED' || isMissedPaid) && noRefundYet;
+
+        const borderColor = isRefundRequested ? '#f59e0b'
+            : isPending ? '#fbbf24'
+            : isMissedPaid ? '#f97316'
+            : isRescheduled ? '#8b5cf6'
+            : '#e5e7eb';
+        const shadow = isRefundRequested ? '0 2px 8px rgba(245,158,11,0.18)'
+            : isPending ? '0 2px 8px rgba(251,191,36,0.15)'
             : isMissedPaid ? '0 2px 8px rgba(249,115,22,0.15)'
             : isRescheduled ? '0 2px 8px rgba(139,92,246,0.15)'
             : '0 1px 3px rgba(0,0,0,0.05)';
@@ -352,6 +480,11 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                         <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: '600', background: pb.bg, color: pb.color, whiteSpace: 'nowrap' }}>
                             {pb.icon} {pb.label}
                         </span>
+                        {rb && (
+                            <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: '700', background: rb.bg, color: rb.color, whiteSpace: 'nowrap' }}>
+                                {rb.icon} {rb.label}
+                            </span>
+                        )}
                     </div>
                 </div>
 
@@ -398,8 +531,73 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                     </div>
                 )}
 
+                {/* Refund requested notice */}
+                {isRefundRequested && (
+                    <div style={{ background: '#fffbeb', border: '1.5px solid #f59e0b', borderRadius: '7px', padding: '9px 12px', marginBottom: '8px' }}>
+                        <div style={{ fontSize: '12px', color: '#92400e', fontWeight: '700', marginBottom: '4px' }}>
+                            🔄 Patient has requested a refund
+                        </div>
+                        {group.refundReason && (
+                            <div style={{ fontSize: '11px', color: '#78350f', background: '#fef3c7', borderRadius: '5px', padding: '5px 8px', marginBottom: '8px', fontStyle: 'italic' }}>
+                                "{group.refundReason}"
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                                onClick={() => setRefundModal({ group, action: 'APPROVED' })}
+                                disabled={processingRefund}
+                                style={{ flex: 1, padding: '5px 10px', background: '#059669', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '700', fontSize: '11px' }}
+                            >
+                                ✅ Approve Refund
+                            </button>
+                            <button
+                                onClick={() => setRefundModal({ group, action: 'REJECTED' })}
+                                disabled={processingRefund}
+                                style={{ flex: 1, padding: '5px 10px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '700', fontSize: '11px' }}
+                            >
+                                ✕ Reject Refund
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Approved refund notice */}
+                {(group.refundStatus || '').toUpperCase() === 'APPROVED' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#d1fae5', border: '1px solid #6ee7b7', borderRadius: '7px', padding: '7px 10px', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '14px' }}>✅</span>
+                        <div style={{ fontSize: '11px', color: '#065f46', fontWeight: '600' }}>
+                            Refund approved and processed for this patient.
+                        </div>
+                    </div>
+                )}
+
+                {/* Rejected refund notice */}
+                {(group.refundStatus || '').toUpperCase() === 'REJECTED' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: '7px', padding: '7px 10px', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '14px' }}>❌</span>
+                        <div style={{ fontSize: '11px', color: '#991b1b', fontWeight: '600' }}>
+                            Refund request was rejected.
+                        </div>
+                    </div>
+                )}
+
+                {/* Admin-initiated refund button (paid + scheduled or missed + no refund yet) */}
+                {canRefund && !isRefundRequested && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff7ed', border: '1px solid #f97316', borderRadius: '7px', padding: '7px 10px', marginBottom: '8px' }}>
+                        <div style={{ fontSize: '11px', color: '#9a3412', fontWeight: '600' }}>
+                            💸 This patient has paid. Issue a refund if needed.
+                        </div>
+                        <button
+                            onClick={() => setRefundModal({ group, action: 'APPROVED' })}
+                            style={{ padding: '4px 12px', background: '#ea580c', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '700', fontSize: '11px', marginLeft: '10px', whiteSpace: 'nowrap' }}
+                        >
+                            💰 Refund
+                        </button>
+                    </div>
+                )}
+
                 {/* Paid but missed notice */}
-                {isMissedPaid && (
+                {isMissedPaid && !isRefundRequested && noRefundYet && (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff7ed', border: '1px solid #f97316', borderRadius: '7px', padding: '7px 10px', marginBottom: '8px' }}>
                         <div style={{ fontSize: '11px', color: '#9a3412', fontWeight: '600' }}>
                             💸 Patient paid but missed. Offer a refund or reschedule below.
@@ -480,6 +678,47 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     return (
         <div style={{ padding: '0' }}>
 
+            {/* ── Refund Confirm Modal ── */}
+            {refundModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+                    <div style={{ background: 'white', borderRadius: '14px', padding: '22px', width: '100%', maxWidth: '380px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+                        <div style={{ fontSize: '22px', textAlign: 'center', marginBottom: '8px' }}>
+                            {refundModal.action === 'APPROVED' ? '✅' : '❌'}
+                        </div>
+                        <div style={{ fontSize: '16px', fontWeight: '800', color: '#111827', marginBottom: '6px', textAlign: 'center' }}>
+                            {refundModal.action === 'APPROVED' ? 'Approve Refund' : 'Reject Refund'}
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '16px', textAlign: 'center' }}>
+                            {refundModal.group.patientName} · {formatNaira(refundModal.group.totalPrice)}
+                        </div>
+                        {refundModal.group.refundReason && (
+                            <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '7px', padding: '9px 12px', marginBottom: '14px', fontSize: '12px', color: '#374151', fontStyle: 'italic' }}>
+                                Patient reason: "{refundModal.group.refundReason}"
+                            </div>
+                        )}
+                        <div style={{ fontSize: '13px', color: '#374151', marginBottom: '18px', lineHeight: '1.5', textAlign: 'center' }}>
+                            {refundModal.action === 'APPROVED'
+                                ? `This will mark the refund as approved and reset the payment status to Unpaid. Confirm that you have issued ${formatNaira(refundModal.group.totalPrice)} back to ${refundModal.group.patientName}.`
+                                : `This will reject the refund request for ${refundModal.group.patientName}. The patient will be notified.`
+                            }
+                        </div>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button onClick={() => setRefundModal(null)}
+                                style={{ flex: 1, padding: '10px', background: '#f3f4f6', color: '#374151', border: '1.5px solid #e5e7eb', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', fontSize: '13px' }}>
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => handleProcessRefund(refundModal.group, refundModal.action)}
+                                disabled={processingRefund}
+                                style={{ flex: 2, padding: '10px', background: processingRefund ? '#9ca3af' : (refundModal.action === 'APPROVED' ? '#059669' : '#dc2626'), color: 'white', border: 'none', borderRadius: '8px', cursor: processingRefund ? 'not-allowed' : 'pointer', fontWeight: '700', fontSize: '13px' }}
+                            >
+                                {processingRefund ? 'Processing...' : (refundModal.action === 'APPROVED' ? '✅ Confirm Approval' : '✕ Confirm Rejection')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* ── Reschedule Modal ── */}
             {rescheduleModal && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
@@ -550,9 +789,10 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
 
             {/* ── Section pills ── */}
             <div style={{ display: 'flex', gap: '10px', padding: '16px 16px 0', flexWrap: 'wrap' }}>
-                <SectionPill id="pending-payments" label="💳 Pending Payments" count={pendingPayments.length} alertCount={pendingPayments.length} />
-                <SectionPill id="paid-missed"      label="💸 Paid & Missed"    count={paidButMissed.length}    alertCount={paidButMissed.length} />
+                <SectionPill id="pending-payments" label="💳 Pending Payments" count={pendingPayments.length}    alertCount={pendingPayments.length} />
+                <SectionPill id="paid-missed"      label="💸 Paid & Missed"    count={paidButMissed.length}     alertCount={paidButMissed.length} />
                 <SectionPill id="rescheduled"      label="🔁 Rescheduled"      count={rescheduledGroups.length} alertCount={0} />
+                <SectionPill id="refunds"          label="💰 Refunds"          count={refundGroups.length}      alertCount={pendingRefundGroups.length} />
                 <SectionPill id="all-appointments" label="📅 All Appointments" count={appointments.length}      alertCount={0} />
             </div>
 
@@ -563,9 +803,10 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                         subtitle="Patients who transferred to Sterling Bank (0089364407) and tapped 'I Have Paid'."
                         count={pendingPayments.length}
                         bg="linear-gradient(135deg,#fef3c7,#fde68a)" border="#fbbf24" countBg="#d97706" />
-                    {pendingPayments.length === 0
-                        ? <EmptyState emoji="✅" title="All payments confirmed" sub="No pending bank transfers to review" />
-                        : pendingPayments.map(g => <GroupCard key={g.key} group={g} />)}
+                    <SearchBar value={pendingSearch} onChange={setPendingSearch} />
+                    {filterByName(pendingPayments, pendingSearch).length === 0
+                        ? <EmptyState emoji={pendingSearch ? '🔍' : '✅'} title={pendingSearch ? 'No results found' : 'All payments confirmed'} sub={pendingSearch ? `No pending payments matching "${pendingSearch}"` : 'No pending bank transfers to review'} />
+                        : filterByName(pendingPayments, pendingSearch).map(g => <GroupCard key={g.key} group={g} />)}
                 </div>
             )}
 
@@ -576,9 +817,10 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                         subtitle="These patients paid but did not show up. Offer a refund or reschedule."
                         count={paidButMissed.length}
                         bg="linear-gradient(135deg,#fff7ed,#fed7aa)" border="#f97316" countBg="#ea580c" />
-                    {paidButMissed.length === 0
-                        ? <EmptyState emoji="✅" title="No paid missed appointments" sub="All paying patients attended their appointments" />
-                        : paidButMissed.map(g => <GroupCard key={g.key} group={g} />)}
+                    <SearchBar value={missedSearch} onChange={setMissedSearch} />
+                    {filterByName(paidButMissed, missedSearch).length === 0
+                        ? <EmptyState emoji={missedSearch ? '🔍' : '✅'} title={missedSearch ? 'No results found' : 'No paid missed appointments'} sub={missedSearch ? `No paid missed appointments matching "${missedSearch}"` : 'All paying patients attended their appointments'} />
+                        : filterByName(paidButMissed, missedSearch).map(g => <GroupCard key={g.key} group={g} />)}
                 </div>
             )}
 
@@ -589,13 +831,57 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                         subtitle="Previously missed (paid) appointments that have been given a new slot. Mark as Completed once attended."
                         count={rescheduledGroups.length}
                         bg="linear-gradient(135deg,#f5f3ff,#ede9fe)" border="#8b5cf6" countBg="#7c3aed" />
-                    {rescheduledGroups.length === 0
-                        ? <EmptyState emoji="✅" title="No rescheduled appointments" sub="Rescheduled appointments will appear here" />
-                        : rescheduledGroups.map(g => <GroupCard key={g.key} group={g} />)}
+                    <SearchBar value={rescheduledSearch} onChange={setRescheduledSearch} />
+                    {filterByName(rescheduledGroups, rescheduledSearch).length === 0
+                        ? <EmptyState emoji={rescheduledSearch ? '🔍' : '✅'} title={rescheduledSearch ? 'No results found' : 'No rescheduled appointments'} sub={rescheduledSearch ? `No rescheduled appointments matching "${rescheduledSearch}"` : 'Rescheduled appointments will appear here'} />
+                        : filterByName(rescheduledGroups, rescheduledSearch).map(g => <GroupCard key={g.key} group={g} />)}
                 </div>
             )}
 
-            {/* ══ SECTION 4 — ALL APPOINTMENTS ══ */}
+            {/* ══ SECTION 4 — REFUNDS ══ */}
+            {activeSection === 'refunds' && (
+                <div style={{ padding: '14px 16px' }}>
+                    <SectionBanner icon="💰" title="Refund Requests"
+                        subtitle="Patient refund requests. Approve to confirm payment was returned, or reject to decline the request."
+                        count={refundGroups.length}
+                        bg="linear-gradient(135deg,#fffbeb,#fef3c7)" border="#f59e0b" countBg="#d97706" />
+
+                    {/* Refund sub-filter tabs */}
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                        {[
+                            { key: 'all',       label: 'All',          count: refundGroups.length,                                                                              color: '#6b7280' },
+                            { key: 'REQUESTED', label: '🔄 Pending',   count: refundGroups.filter(g => (g.refundStatus || '').toUpperCase() === 'REQUESTED').length,            color: '#92400e' },
+                            { key: 'APPROVED',  label: '✅ Approved',  count: refundGroups.filter(g => (g.refundStatus || '').toUpperCase() === 'APPROVED').length,             color: '#065f46' },
+                            { key: 'REJECTED',  label: '❌ Rejected',  count: refundGroups.filter(g => (g.refundStatus || '').toUpperCase() === 'REJECTED').length,             color: '#991b1b' },
+                        ].map(tab => (
+                            <button key={tab.key} onClick={() => setRefundSubFilter(tab.key)}
+                                style={{
+                                    padding: '5px 12px', borderRadius: '20px',
+                                    border: `2px solid ${refundSubFilter === tab.key ? tab.color : '#e5e7eb'}`,
+                                    background: refundSubFilter === tab.key ? tab.color : 'white',
+                                    color: refundSubFilter === tab.key ? 'white' : tab.color,
+                                    fontWeight: '700', fontSize: '12px', cursor: 'pointer',
+                                }}>
+                                {tab.label} ({tab.count})
+                            </button>
+                        ))}
+                    </div>
+
+                    <SearchBar value={refundSearch} onChange={setRefundSearch} />
+
+                    {(() => {
+                        const subFiltered = refundSubFilter === 'all'
+                            ? refundGroups
+                            : refundGroups.filter(g => (g.refundStatus || '').toUpperCase() === refundSubFilter);
+                        const nameFiltered = filterByName(subFiltered, refundSearch);
+                        return nameFiltered.length === 0
+                            ? <EmptyState emoji={refundSearch ? '🔍' : '🎉'} title={refundSearch ? 'No results found' : 'No refund requests'} sub={refundSearch ? `No refund requests matching "${refundSearch}"` : 'No patients have requested refunds yet'} />
+                            : nameFiltered.map(g => <GroupCard key={g.key} group={g} />);
+                    })()}
+                </div>
+            )}
+
+            {/* ══ SECTION 5 — ALL APPOINTMENTS ══ */}
             {activeSection === 'all-appointments' && (
                 <div style={{ padding: '14px 16px' }}>
                     {/* Status pills */}

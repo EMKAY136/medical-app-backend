@@ -373,6 +373,17 @@ public class AppointmentService {
         dto.setPaymentApprovedAt(appointment.getPaymentApprovedAt());
         dto.setPaymentApprovedBy(appointment.getPaymentApprovedBy());
 
+        // ── Refund fields ────────────────────────────────────────────────────
+        dto.setRefundStatus(
+            appointment.getRefundStatus() != null
+                ? appointment.getRefundStatus().name()
+                : "NONE"
+        );
+        dto.setRefundReason(appointment.getRefundReason());
+        dto.setRefundRequestedAt(appointment.getRefundRequestedAt());
+        dto.setRefundApprovedAt(appointment.getRefundApprovedAt());
+        dto.setRefundApprovedBy(appointment.getRefundApprovedBy());
+
         return dto;
     }
 }

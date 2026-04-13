@@ -203,4 +203,78 @@ public class AppointmentController {
         }
     }
 
+    // Patient requests a refund
+@PatchMapping("/{id}/request-refund")
+public ResponseEntity<?> requestRefund(
+        @PathVariable Long id,
+        @RequestBody Map<String, String> body,
+        @AuthenticationPrincipal UserDetails userDetails) {
+    try {
+        Optional<Appointment> aptOpt = appointmentRepository.findById(id);
+        if (aptOpt.isEmpty())
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", "Appointment not found"));
+
+        Appointment apt = aptOpt.get();
+
+        // Only allow if paid
+        if (apt.getPaymentStatus() != Appointment.PaymentStatus.PAID)
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", "Only paid appointments can be refunded"));
+
+        if (apt.getRefundStatus() == Appointment.RefundStatus.REQUESTED ||
+            apt.getRefundStatus() == Appointment.RefundStatus.APPROVED)
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", "Refund already requested or approved"));
+
+        apt.setRefundStatus(Appointment.RefundStatus.REQUESTED);
+        apt.setRefundReason(body.getOrDefault("reason", "Patient requested refund"));
+        apt.setRefundRequestedAt(java.time.LocalDateTime.now());
+        apt.setUpdatedAt(java.time.LocalDateTime.now());
+        appointmentRepository.save(apt);
+
+        return ResponseEntity.ok(Map.of("success", true, "message", "Refund request submitted successfully"));
+    } catch (Exception e) {
+        return ResponseEntity.internalServerError()
+                .body(Map.of("success", false, "message", e.getMessage()));
+    }
+}
+
+// Admin approves or rejects a refund
+@PatchMapping("/{id}/process-refund")
+public ResponseEntity<?> processRefund(
+        @PathVariable Long id,
+        @RequestBody Map<String, String> body,
+        @AuthenticationPrincipal UserDetails userDetails) {
+    try {
+        Optional<Appointment> aptOpt = appointmentRepository.findById(id);
+        if (aptOpt.isEmpty())
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", "Appointment not found"));
+
+        Appointment apt = aptOpt.get();
+        String action = body.getOrDefault("action", "APPROVED").toUpperCase();
+
+        apt.setRefundStatus(action.equals("APPROVED")
+                ? Appointment.RefundStatus.APPROVED
+                : Appointment.RefundStatus.REJECTED);
+        apt.setRefundApprovedAt(java.time.LocalDateTime.now());
+        apt.setRefundApprovedBy(userDetails.getUsername());
+        apt.setUpdatedAt(java.time.LocalDateTime.now());
+
+        if (action.equals("APPROVED")) {
+            apt.setPaymentStatus(Appointment.PaymentStatus.UNPAID);
+        }
+
+        appointmentRepository.save(apt);
+
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "message", "Refund " + action.toLowerCase() + " successfully"));
+    } catch (Exception e) {
+        return ResponseEntity.internalServerError()
+                .body(Map.of("success", false, "message", e.getMessage()));
+    }
+}
+
 }
