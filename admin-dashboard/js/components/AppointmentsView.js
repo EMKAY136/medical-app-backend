@@ -4,13 +4,14 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     const [filterStatus, setFilterStatus] = useState('all');
     const [filterPayment, setFilterPayment] = useState('all');
     const [filterDate, setFilterDate] = useState('');
+    const [searchName, setSearchName] = useState('');          // ✅ NEW: patient name search
     const [actionLoading, setActionLoading] = useState(null);
     const [activeSection, setActiveSection] = useState('pending-payments');
     const [editingGroup, setEditingGroup] = useState(null);
     const [editTests, setEditTests] = useState([]);
     const [savingTests, setSavingTests] = useState(false);
 
-    // ── Date parser — treats bare ISO strings as LOCAL time (no UTC shift) ───
+    // ── Date parser ──────────────────────────────────────────────────────────
     const parseDate = (v) => {
         if (!v) return null;
         try {
@@ -19,7 +20,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 return new Date(yr, mo - 1, dy, hr, mn);
             }
             const s = String(v).trim();
-            // No timezone suffix → parse as local to avoid UTC hour shift
             if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !s.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(s)) {
                 const [datePart, timePart] = s.split('T');
                 const [yr, mo, dy] = datePart.split('-').map(Number);
@@ -34,6 +34,10 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     const fmtDate = (v) => {
         const d = parseDate(v);
         if (!d) return 'Not scheduled';
+        // Hide midnight time — means no time was set
+        if (d.getHours() === 0 && d.getMinutes() === 0) {
+            return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        }
         return `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     };
 
@@ -90,7 +94,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
             groups[key].appointments.push(apt);
             groups[key].totalPrice += parsePrice(apt.price);
 
-            // Highest-priority status wins for the group label
             const statuses = groups[key].appointments.map(a => (a.status || '').toUpperCase());
             if (statuses.includes('SCHEDULED'))      groups[key].status = 'SCHEDULED';
             else if (statuses.includes('MISSED'))    groups[key].status = 'MISSED';
@@ -114,6 +117,15 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         return groupAppointments(pending);
     }, [appointments]);
 
+    // ── ✅ NEW: Paid but missed groups ───────────────────────────────────────
+    const paidButMissed = useMemo(() => {
+        const missed = appointments.filter(a =>
+            (a.status || '').toUpperCase() === 'MISSED' &&
+            (a.paymentStatus || '').toUpperCase() === 'PAID'
+        );
+        return groupAppointments(missed);
+    }, [appointments]);
+
     // ── Status counts ────────────────────────────────────────────────────────
     const counts = useMemo(() => ({
         all:       appointments.length,
@@ -123,20 +135,23 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         cancelled: appointments.filter(a => (a.status || '').toUpperCase() === 'CANCELLED').length,
     }), [appointments]);
 
-    // ── Filtered + grouped list ──────────────────────────────────────────────
+    // ── Filtered + grouped list (with name search) ───────────────────────────
     const filteredGroups = useMemo(() => {
+        const q = searchName.toLowerCase().trim();
         const filtered = appointments.filter(apt => {
-            const stOk  = filterStatus  === 'all' || (apt.status || '').toLowerCase() === filterStatus;
-            const payOk = filterPayment === 'all' || (apt.paymentStatus || '').toLowerCase() === filterPayment;
-            let dateOk  = true;
+            const stOk   = filterStatus  === 'all' || (apt.status || '').toLowerCase() === filterStatus;
+            const payOk  = filterPayment === 'all' || (apt.paymentStatus || '').toLowerCase() === filterPayment;
+            // ✅ NEW: name search
+            const nameOk = !q || (apt.patientName || '').toLowerCase().includes(q);
+            let dateOk   = true;
             if (filterDate) {
                 const d = parseDate(apt.appointmentDate || apt.scheduledDate || apt.date || apt.createdAt);
                 dateOk = d ? d.toDateString() === new Date(filterDate).toDateString() : false;
             }
-            return stOk && payOk && dateOk;
+            return stOk && payOk && nameOk && dateOk;
         });
         return groupAppointments(filtered);
-    }, [appointments, filterStatus, filterPayment, filterDate]);
+    }, [appointments, filterStatus, filterPayment, filterDate, searchName]);
 
     // ── API helpers ──────────────────────────────────────────────────────────
     const apiPatch = async (url) => {
@@ -158,12 +173,10 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         return res.json();
     };
 
-    // ── Approve all appointments in a group ──────────────────────────────────
     const handleApprovePayment = async (group) => {
         if (!window.confirm(
             `Confirm receipt of ${formatNaira(group.totalPrice)} for ${group.appointments.length} test(s) from ${group.patientName}?`
         )) return;
-
         for (const apt of group.appointments) {
             setActionLoading(apt.id + '-pay');
             try {
@@ -186,7 +199,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         onRefresh && onRefresh();
     };
 
-    // ── Mark missed ──────────────────────────────────────────────────────────
     const handleMarkMissed = async (aptId) => {
         setActionLoading(aptId + '-miss');
         try {
@@ -204,13 +216,10 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         }
     };
 
-    // ── Update status ────────────────────────────────────────────────────────
     const handleUpdateStatus = async (aptId, newStatus) => {
         setActionLoading(aptId + '-status');
         try {
-            const data = await apiPut(
-                `/api/admin/appointments/${aptId}/status?status=${newStatus}`
-            );
+            const data = await apiPut(`/api/admin/appointments/${aptId}/status?status=${newStatus}`);
             if (data.success) {
                 window.showNotificationAlert && window.showNotificationAlert(`Status updated to ${newStatus}`);
                 onRefresh && onRefresh();
@@ -224,14 +233,12 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         }
     };
 
-    // ── Apply status to every appointment in group ───────────────────────────
     const handleGroupStatus = async (group, newStatus) => {
         for (const apt of group.appointments) {
             await handleUpdateStatus(apt.id, newStatus);
         }
     };
 
-    // ── Edit tests ───────────────────────────────────────────────────────────
     const openEditTests = (group) => {
         setEditingGroup(group);
         setEditTests(group.appointments.map(a => ({
@@ -246,10 +253,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         setSavingTests(true);
         try {
             for (const t of editTests) {
-                await apiPut(`/api/admin/appointments/${t.id}`, {
-                    testType: t.testType,
-                    price: t.price,
-                });
+                await apiPut(`/api/admin/appointments/${t.id}`, { testType: t.testType, price: t.price });
             }
             window.showNotificationAlert && window.showNotificationAlert('Tests updated successfully ✅');
             setEditingGroup(null);
@@ -262,7 +266,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         }
     };
 
-    // ── Section toggle pill ──────────────────────────────────────────────────
+    // ── Section pill ─────────────────────────────────────────────────────────
     const SectionPill = ({ id, label, count, alertCount }) => (
         <button
             onClick={() => setActiveSection(id)}
@@ -300,7 +304,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         </button>
     );
 
-    // ── Compact group card ───────────────────────────────────────────────────
+    // ── Group card ────────────────────────────────────────────────────────────
     const GroupCard = ({ group }) => {
         const sb = getStatusBadge(group.status);
         const pb = getPaymentBadge(group.paymentStatus);
@@ -308,6 +312,9 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         const isPast = aptDate && aptDate < new Date();
         const isSchd = (group.status || '').toUpperCase() === 'SCHEDULED';
         const isPending = (group.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION';
+        const isMissedPaid =
+            (group.status || '').toUpperCase() === 'MISSED' &&
+            (group.paymentStatus || '').toUpperCase() === 'PAID';
         const isGroupLoading = group.appointments.some(a =>
             actionLoading === a.id + '-pay' ||
             actionLoading === a.id + '-status' ||
@@ -317,9 +324,13 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         return (
             <div style={{
                 background: 'white',
-                border: `1.5px solid ${isPending ? '#fbbf24' : '#e5e7eb'}`,
+                border: `1.5px solid ${isPending ? '#fbbf24' : isMissedPaid ? '#f97316' : '#e5e7eb'}`,
                 borderRadius: '10px', padding: '12px 14px', marginBottom: '10px',
-                boxShadow: isPending ? '0 2px 8px rgba(251,191,36,0.15)' : '0 1px 3px rgba(0,0,0,0.05)',
+                boxShadow: isPending
+                    ? '0 2px 8px rgba(251,191,36,0.15)'
+                    : isMissedPaid
+                    ? '0 2px 8px rgba(249,115,22,0.15)'
+                    : '0 1px 3px rgba(0,0,0,0.05)',
             }}>
                 {/* Row 1: avatar + name + date + badges */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
@@ -354,27 +365,19 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                     </div>
                 </div>
 
-                {/* Row 2: tests breakdown */}
-                <div style={{
-                    background: '#f9fafb', border: '1px solid #e5e7eb',
-                    borderRadius: '7px', padding: '8px 10px', marginBottom: '8px',
-                }}>
+                {/* Row 2: tests */}
+                <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '7px', padding: '8px 10px', marginBottom: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
                         <span style={{ fontSize: '10px', fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                             {group.appointments.length} Test{group.appointments.length > 1 ? 's' : ''}
                         </span>
                         <button
                             onClick={() => openEditTests(group)}
-                            style={{
-                                fontSize: '10px', fontWeight: '700', color: '#667eea',
-                                background: '#ede9fe', border: 'none', borderRadius: '5px',
-                                padding: '2px 8px', cursor: 'pointer',
-                            }}
+                            style={{ fontSize: '10px', fontWeight: '700', color: '#667eea', background: '#ede9fe', border: 'none', borderRadius: '5px', padding: '2px 8px', cursor: 'pointer' }}
                         >
                             ✏️ Edit Tests
                         </button>
                     </div>
-
                     {group.appointments.map((apt, i) => (
                         <div key={apt.id} style={{
                             display: 'flex', justifyContent: 'space-between',
@@ -390,7 +393,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                             </span>
                         </div>
                     ))}
-
                     {group.appointments.length > 1 && (
                         <div style={{
                             display: 'flex', justifyContent: 'space-between',
@@ -403,7 +405,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                     )}
                 </div>
 
-                {/* Row 3: pending payment notice + approve */}
+                {/* Row 3: pending payment */}
                 {isPending && (
                     <div style={{
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -416,19 +418,27 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                         <button
                             onClick={() => handleApprovePayment(group)}
                             disabled={isGroupLoading}
-                            style={{
-                                padding: '4px 12px', background: '#059669', color: 'white',
-                                border: 'none', borderRadius: '6px', cursor: 'pointer',
-                                fontWeight: '700', fontSize: '11px', marginLeft: '10px', whiteSpace: 'nowrap',
-                                opacity: isGroupLoading ? 0.6 : 1,
-                            }}
+                            style={{ padding: '4px 12px', background: '#059669', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '700', fontSize: '11px', marginLeft: '10px', whiteSpace: 'nowrap', opacity: isGroupLoading ? 0.6 : 1 }}
                         >
                             {isGroupLoading ? '...' : '✅ Approve'}
                         </button>
                     </div>
                 )}
 
-                {/* Row 4: action buttons (only for scheduled) */}
+                {/* ✅ NEW: Paid but missed notice */}
+                {isMissedPaid && (
+                    <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        background: '#fff7ed', border: '1px solid #f97316',
+                        borderRadius: '7px', padding: '7px 10px', marginBottom: '8px',
+                    }}>
+                        <div style={{ fontSize: '11px', color: '#9a3412', fontWeight: '600' }}>
+                            💸 Patient paid but missed this appointment. Consider a refund or reschedule.
+                        </div>
+                    </div>
+                )}
+
+                {/* Row 4: action buttons */}
                 {isSchd && (
                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                         <button
@@ -472,93 +482,38 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     return (
         <div style={{ padding: '0' }}>
 
-            {/* ── Edit Tests Modal ─────────────────────────────────────────── */}
+            {/* Edit Tests Modal */}
             {editingGroup && (
-                <div style={{
-                    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
-                    zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
-                }}>
-                    <div style={{
-                        background: 'white', borderRadius: '14px', padding: '22px',
-                        width: '100%', maxWidth: '460px', maxHeight: '85vh', overflowY: 'auto',
-                        boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-                    }}>
-                        <div style={{ fontSize: '16px', fontWeight: '800', color: '#111827', marginBottom: '3px' }}>
-                            ✏️ Edit Tests
-                        </div>
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+                    <div style={{ background: 'white', borderRadius: '14px', padding: '22px', width: '100%', maxWidth: '460px', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+                        <div style={{ fontSize: '16px', fontWeight: '800', color: '#111827', marginBottom: '3px' }}>✏️ Edit Tests</div>
                         <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '16px' }}>
                             {editingGroup.patientName} · {fmtDate(editingGroup.appointmentDate)}
                         </div>
-
                         {editTests.map((t, i) => (
-                            <div key={t.id} style={{
-                                background: '#f9fafb', border: '1px solid #e5e7eb',
-                                borderRadius: '8px', padding: '12px', marginBottom: '10px',
-                            }}>
-                                <div style={{ fontSize: '10px', fontWeight: '700', color: '#6b7280', marginBottom: '8px', textTransform: 'uppercase' }}>
-                                    Test {i + 1}
-                                </div>
+                            <div key={t.id} style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px', marginBottom: '10px' }}>
+                                <div style={{ fontSize: '10px', fontWeight: '700', color: '#6b7280', marginBottom: '8px', textTransform: 'uppercase' }}>Test {i + 1}</div>
                                 <div style={{ marginBottom: '8px' }}>
-                                    <label style={{ fontSize: '11px', color: '#374151', fontWeight: '600', display: 'block', marginBottom: '3px' }}>
-                                        Test Name
-                                    </label>
+                                    <label style={{ fontSize: '11px', color: '#374151', fontWeight: '600', display: 'block', marginBottom: '3px' }}>Test Name</label>
                                     <input
                                         value={t.testType}
-                                        onChange={e => {
-                                            const u = [...editTests];
-                                            u[i] = { ...u[i], testType: e.target.value };
-                                            setEditTests(u);
-                                        }}
-                                        style={{
-                                            width: '100%', padding: '7px 10px', borderRadius: '6px',
-                                            border: '1.5px solid #d1d5db', fontSize: '13px',
-                                            boxSizing: 'border-box', outline: 'none',
-                                        }}
+                                        onChange={e => { const u = [...editTests]; u[i] = { ...u[i], testType: e.target.value }; setEditTests(u); }}
+                                        style={{ width: '100%', padding: '7px 10px', borderRadius: '6px', border: '1.5px solid #d1d5db', fontSize: '13px', boxSizing: 'border-box', outline: 'none' }}
                                     />
                                 </div>
                                 <div>
-                                    <label style={{ fontSize: '11px', color: '#374151', fontWeight: '600', display: 'block', marginBottom: '3px' }}>
-                                        Price
-                                    </label>
+                                    <label style={{ fontSize: '11px', color: '#374151', fontWeight: '600', display: 'block', marginBottom: '3px' }}>Price</label>
                                     <input
                                         value={t.price}
-                                        onChange={e => {
-                                            const u = [...editTests];
-                                            u[i] = { ...u[i], price: e.target.value };
-                                            setEditTests(u);
-                                        }}
-                                        style={{
-                                            width: '100%', padding: '7px 10px', borderRadius: '6px',
-                                            border: '1.5px solid #d1d5db', fontSize: '13px',
-                                            boxSizing: 'border-box', outline: 'none',
-                                        }}
+                                        onChange={e => { const u = [...editTests]; u[i] = { ...u[i], price: e.target.value }; setEditTests(u); }}
+                                        style={{ width: '100%', padding: '7px 10px', borderRadius: '6px', border: '1.5px solid #d1d5db', fontSize: '13px', boxSizing: 'border-box', outline: 'none' }}
                                     />
                                 </div>
                             </div>
                         ))}
-
                         <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
-                            <button
-                                onClick={() => { setEditingGroup(null); setEditTests([]); }}
-                                style={{
-                                    flex: 1, padding: '10px', background: '#f3f4f6',
-                                    color: '#374151', border: '1.5px solid #e5e7eb',
-                                    borderRadius: '8px', cursor: 'pointer', fontWeight: '700', fontSize: '13px',
-                                }}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={saveEditedTests}
-                                disabled={savingTests}
-                                style={{
-                                    flex: 2, padding: '10px',
-                                    background: savingTests ? '#9ca3af' : '#667eea',
-                                    color: 'white', border: 'none', borderRadius: '8px',
-                                    cursor: savingTests ? 'not-allowed' : 'pointer',
-                                    fontWeight: '700', fontSize: '13px',
-                                }}
-                            >
+                            <button onClick={() => { setEditingGroup(null); setEditTests([]); }} style={{ flex: 1, padding: '10px', background: '#f3f4f6', color: '#374151', border: '1.5px solid #e5e7eb', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', fontSize: '13px' }}>Cancel</button>
+                            <button onClick={saveEditedTests} disabled={savingTests} style={{ flex: 2, padding: '10px', background: savingTests ? '#9ca3af' : '#667eea', color: 'white', border: 'none', borderRadius: '8px', cursor: savingTests ? 'not-allowed' : 'pointer', fontWeight: '700', fontSize: '13px' }}>
                                 {savingTests ? 'Saving...' : '💾 Save Changes'}
                             </button>
                         </div>
@@ -566,74 +521,65 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 </div>
             )}
 
-            {/* ── Section toggle pills ────────────────────────────────────── */}
+            {/* Section toggle pills */}
             <div style={{ display: 'flex', gap: '10px', padding: '16px 16px 0', flexWrap: 'wrap' }}>
-                <SectionPill
-                    id="pending-payments"
-                    label="💳 Pending Payments"
-                    count={pendingPayments.length}
-                    alertCount={pendingPayments.length}
-                />
-                <SectionPill
-                    id="all-appointments"
-                    label="📅 All Appointments"
-                    count={appointments.length}
-                    alertCount={0}
-                />
+                <SectionPill id="pending-payments" label="💳 Pending Payments" count={pendingPayments.length} alertCount={pendingPayments.length} />
+                {/* ✅ NEW: Paid but Missed tab */}
+                <SectionPill id="paid-missed" label="💸 Paid & Missed" count={paidButMissed.length} alertCount={paidButMissed.length} />
+                <SectionPill id="all-appointments" label="📅 All Appointments" count={appointments.length} alertCount={0} />
             </div>
 
-            {/* ════════════════════════════════════════════════════
-                SECTION 1 — PENDING PAYMENTS
-            ════════════════════════════════════════════════════ */}
+            {/* ══ SECTION 1 — PENDING PAYMENTS ══ */}
             {activeSection === 'pending-payments' && (
                 <div style={{ padding: '14px 16px' }}>
-                    {/* Header */}
-                    <div style={{
-                        background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
-                        border: '2px solid #fbbf24', borderRadius: '12px',
-                        padding: '12px 16px', marginBottom: '14px',
-                        display: 'flex', alignItems: 'center', gap: '12px',
-                    }}>
+                    <div style={{ background: 'linear-gradient(135deg, #fef3c7, #fde68a)', border: '2px solid #fbbf24', borderRadius: '12px', padding: '12px 16px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '12px' }}>
                         <div style={{ fontSize: '26px' }}>⏳</div>
                         <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: '15px', fontWeight: '800', color: '#92400e' }}>
-                                Payment Approvals
-                            </div>
+                            <div style={{ fontSize: '15px', fontWeight: '800', color: '#92400e' }}>Payment Approvals</div>
                             <div style={{ fontSize: '11px', color: '#b45309', marginTop: '2px' }}>
                                 Patients who transferred to Sterling Bank (0089364407) and tapped "I Have Paid". Verify and approve.
                             </div>
                         </div>
-                        <div style={{
-                            background: '#d97706', color: 'white',
-                            padding: '6px 14px', borderRadius: '8px',
-                            fontSize: '18px', fontWeight: '900', minWidth: '40px', textAlign: 'center',
-                        }}>
+                        <div style={{ background: '#d97706', color: 'white', padding: '6px 14px', borderRadius: '8px', fontSize: '18px', fontWeight: '900', minWidth: '40px', textAlign: 'center' }}>
                             {pendingPayments.length}
                         </div>
                     </div>
-
                     {pendingPayments.length === 0 ? (
-                        <div style={{
-                            textAlign: 'center', padding: '40px 20px',
-                            background: 'white', borderRadius: '12px', border: '2px dashed #e5e7eb',
-                        }}>
+                        <div style={{ textAlign: 'center', padding: '40px 20px', background: 'white', borderRadius: '12px', border: '2px dashed #e5e7eb' }}>
                             <div style={{ fontSize: '44px', marginBottom: '8px' }}>✅</div>
-                            <div style={{ fontSize: '15px', fontWeight: '700', color: '#374151', marginBottom: '4px' }}>
-                                All payments confirmed
-                            </div>
-                            <div style={{ fontSize: '12px', color: '#9ca3af' }}>
-                                No pending bank transfers to review
-                            </div>
+                            <div style={{ fontSize: '15px', fontWeight: '700', color: '#374151', marginBottom: '4px' }}>All payments confirmed</div>
+                            <div style={{ fontSize: '12px', color: '#9ca3af' }}>No pending bank transfers to review</div>
                         </div>
-                    ) : pendingPayments.map(group => (
-                        <GroupCard key={group.key} group={group} />
-                    ))}
+                    ) : pendingPayments.map(group => <GroupCard key={group.key} group={group} />)}
                 </div>
             )}
 
-            {/* ════════════════════════════════════════════════════
-                SECTION 2 — ALL APPOINTMENTS
-            ════════════════════════════════════════════════════ */}
+            {/* ✅ NEW ══ SECTION 2 — PAID BUT MISSED ══ */}
+            {activeSection === 'paid-missed' && (
+                <div style={{ padding: '14px 16px' }}>
+                    <div style={{ background: 'linear-gradient(135deg, #fff7ed, #fed7aa)', border: '2px solid #f97316', borderRadius: '12px', padding: '12px 16px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ fontSize: '26px' }}>💸</div>
+                        <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: '15px', fontWeight: '800', color: '#9a3412' }}>Paid but Missed Appointments</div>
+                            <div style={{ fontSize: '11px', color: '#c2410c', marginTop: '2px' }}>
+                                These patients paid but did not show up. Consider offering a refund or rescheduling.
+                            </div>
+                        </div>
+                        <div style={{ background: '#ea580c', color: 'white', padding: '6px 14px', borderRadius: '8px', fontSize: '18px', fontWeight: '900', minWidth: '40px', textAlign: 'center' }}>
+                            {paidButMissed.length}
+                        </div>
+                    </div>
+                    {paidButMissed.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '40px 20px', background: 'white', borderRadius: '12px', border: '2px dashed #e5e7eb' }}>
+                            <div style={{ fontSize: '44px', marginBottom: '8px' }}>✅</div>
+                            <div style={{ fontSize: '15px', fontWeight: '700', color: '#374151', marginBottom: '4px' }}>No paid missed appointments</div>
+                            <div style={{ fontSize: '12px', color: '#9ca3af' }}>All paying patients attended their appointments</div>
+                        </div>
+                    ) : paidButMissed.map(group => <GroupCard key={group.key} group={group} />)}
+                </div>
+            )}
+
+            {/* ══ SECTION 3 — ALL APPOINTMENTS ══ */}
             {activeSection === 'all-appointments' && (
                 <div style={{ padding: '14px 16px' }}>
                     {/* Status pills */}
@@ -663,6 +609,17 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
 
                     {/* Filters */}
                     <div style={{ display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                        {/* ✅ NEW: Patient name search */}
+                        <div>
+                            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Patient Name</label>
+                            <input
+                                type="text"
+                                placeholder="Search by name..."
+                                value={searchName}
+                                onChange={e => setSearchName(e.target.value)}
+                                style={{ width: '180px', fontSize: '12px', padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: '6px', outline: 'none' }}
+                            />
+                        </div>
                         <div>
                             <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Payment</label>
                             <select
@@ -688,9 +645,9 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                                 style={{ width: '150px', fontSize: '12px', padding: '5px 8px' }}
                             />
                         </div>
-                        {(filterStatus !== 'all' || filterPayment !== 'all' || filterDate) && (
+                        {(filterStatus !== 'all' || filterPayment !== 'all' || filterDate || searchName) && (
                             <button
-                                onClick={() => { setFilterStatus('all'); setFilterPayment('all'); setFilterDate(''); }}
+                                onClick={() => { setFilterStatus('all'); setFilterPayment('all'); setFilterDate(''); setSearchName(''); }}
                                 style={{ padding: '6px 12px', background: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}
                             >
                                 Clear
@@ -707,9 +664,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                             <div style={{ fontSize: '40px', marginBottom: '10px' }}>📅</div>
                             <div style={{ fontSize: '15px', fontWeight: '600', color: '#374151' }}>No appointments found</div>
                         </div>
-                    ) : filteredGroups.map(group => (
-                        <GroupCard key={group.key} group={group} />
-                    ))}
+                    ) : filteredGroups.map(group => <GroupCard key={group.key} group={group} />)}
                 </div>
             )}
         </div>

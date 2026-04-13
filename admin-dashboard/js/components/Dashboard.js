@@ -260,8 +260,9 @@ const MedicalAdminDashboard = () => {
 
             // Only count explicitly MISSED from backend
             const missedAppointments = appointments.filter(apt =>
-                (apt.status || '').toUpperCase() === 'MISSED'
-            ).length;
+    (apt.status || '').toUpperCase() === 'MISSED' &&
+    (apt.paymentStatus || '').toUpperCase() === 'PAID'
+).length
 
             setStats({
                 totalPatients: patients.length,
