@@ -1,729 +1,666 @@
-const { useState, useEffect } = React;
+const { useState, useMemo } = React;
 
-const MedicalAdminDashboard = () => {
-    const [isAuthenticated, setIsAuthenticated]   = useState(false);
-    const [currentView, setCurrentView]           = useState('dashboard');
-    const [patients, setPatients]                 = useState([]);
-    const [appointments, setAppointments]         = useState([]);
-    const [testResults, setTestResults]           = useState([]);
-    const [notifications, setNotifications]       = useState([]);
-    const [autoNotifications, setAutoNotifications] = useState([]);
-    const [loading, setLoading]                   = useState(false);
-    const [showModal, setShowModal]               = useState(null);
-    const [selectedPatient, setSelectedPatient]   = useState(null);
-    const [searchQuery, setSearchQuery]           = useState('');
-    const [notification, setNotification]         = useState(null);
-    const [showNotificationForm, setShowNotificationForm]         = useState(false);
-    const [showAutoNotificationForm, setShowAutoNotificationForm] = useState(false);
-    const [notificationTab, setNotificationTab]   = useState('sent');
-    const [validatingToken, setValidatingToken]   = useState(true);
+const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
+    const [filterStatus, setFilterStatus] = useState('all');
+    const [filterPayment, setFilterPayment] = useState('all');
+    const [filterDate, setFilterDate] = useState('');
+    const [searchName, setSearchName] = useState('');
+    const [actionLoading, setActionLoading] = useState(null);
+    const [activeSection, setActiveSection] = useState('pending-payments');
+    const [editingGroup, setEditingGroup] = useState(null);
+    const [editTests, setEditTests] = useState([]);
+    const [savingTests, setSavingTests] = useState(false);
+    const [rescheduleModal, setRescheduleModal] = useState(null); // group being rescheduled
+    const [rescheduleDate, setRescheduleDate] = useState('');
+    const [rescheduleTime, setRescheduleTime] = useState('');
+    const [rescheduling, setRescheduling] = useState(false);
 
-    // Support Chat
-    const [showSupportChat, setShowSupportChat]       = useState(false);
-    const [supportChatPatient, setSupportChatPatient] = useState(null);
-    const [chatUnreadCount, setChatUnreadCount]       = useState(0); // ✅ NEW: unread badge
-
-    const [formData, setFormData] = useState({
-        recipientId: '', title: '', message: '', type: 'appointment', sendToAll: false,
-    });
-    const [autoFormData, setAutoFormData] = useState({
-        trigger: 'appointment_scheduled', title: '', message: '',
-        type: 'appointment', enabled: true, delayMinutes: 0,
-    });
-
-    const [stats, setStats] = useState({
-        totalPatients: 0, todayAppointments: 0, pendingTests: 0,
-        completedReports: 0, totalNotifications: 0, activeAutoRules: 0,
-        pendingPayments: 0, missedAppointments: 0,
-    });
-
-    // ── Helpers ──────────────────────────────────────────────────────────────
-    const showNotificationAlert = (message, type = 'success') => {
-        setNotification({ message, type });
-        setTimeout(() => setNotification(null), 4000);
-    };
-
+    // ── Date parser ──────────────────────────────────────────────────────────
     const parseDate = (v) => {
         if (!v) return null;
-        if (Array.isArray(v)) {
-            const [yr, mo, dy, hr = 0, mn = 0] = v;
-            return new Date(yr, mo - 1, dy, hr, mn);
-        }
-        const s = String(v).trim();
-        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !s.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(s)) {
-            const [datePart, timePart] = s.split('T');
-            const [yr, mo, dy] = datePart.split('-').map(Number);
-            const [hr, mn] = timePart.split(':').map(Number);
-            return new Date(yr, mo - 1, dy, hr, mn);
-        }
-        const d = new Date(v);
-        return isNaN(d.getTime()) ? null : d;
-    };
-
-    // ── Token validation ─────────────────────────────────────────────────────
-    const validateTokenAndLoad = async (token) => {
         try {
-            const res = await fetch(
-                `${CONFIG.ADMIN_API_URL}/api/admin/patients?page=0&size=1`,
-                { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
-            );
-            if (res.ok) {
-                setIsAuthenticated(true);
-                loadDashboardData();
-            } else {
-                localStorage.removeItem('authToken');
-                localStorage.removeItem('user_info');
-                setIsAuthenticated(false);
+            if (Array.isArray(v)) {
+                const [yr, mo, dy, hr = 0, mn = 0] = v;
+                return new Date(yr, mo - 1, dy, hr, mn);
             }
-        } catch {
-            localStorage.removeItem('authToken');
-            setIsAuthenticated(false);
-        } finally {
-            setValidatingToken(false);
+            const s = String(v).trim();
+            if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !s.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(s)) {
+                const [datePart, timePart] = s.split('T');
+                const [yr, mo, dy] = datePart.split('-').map(Number);
+                const [hr, mn] = timePart.split(':').map(Number);
+                return new Date(yr, mo - 1, dy, hr, mn);
+            }
+            const d = new Date(v);
+            return isNaN(d.getTime()) ? null : d;
+        } catch { return null; }
+    };
+
+    const fmtDate = (v) => {
+        const d = parseDate(v);
+        if (!d) return 'Not scheduled';
+        if (d.getHours() === 0 && d.getMinutes() === 0) {
+            return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        }
+        return `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    };
+
+    // ── Price helpers ────────────────────────────────────────────────────────
+    const parsePrice = (str) =>
+        parseInt((str || '').replace(/[₦,\s]/g, '').split('.')[0], 10) || 0;
+    const formatNaira = (n) => '₦' + n.toLocaleString('en-NG') + '.00';
+
+    // ── Badge helpers ────────────────────────────────────────────────────────
+    const getPaymentBadge = (ps) => {
+        switch ((ps || '').toUpperCase()) {
+            case 'PAID':                 return { label: 'Paid',              bg: '#d1fae5', color: '#065f46', icon: '✅' };
+            case 'PENDING_CONFIRMATION': return { label: 'Awaiting Approval', bg: '#fef3c7', color: '#92400e', icon: '⏳' };
+            case 'PAY_ON_ARRIVAL':       return { label: 'Pay on Arrival',    bg: '#dbeafe', color: '#1e40af', icon: '🕐' };
+            default:                     return { label: 'Unpaid',            bg: '#fee2e2', color: '#991b1b', icon: '❌' };
         }
     };
 
-    useEffect(() => {
-        const token = localStorage.getItem('authToken');
-        if (token) validateTokenAndLoad(token);
-        else setValidatingToken(false);
-    }, []);
-
-    // ── Auto-refresh intervals ────────────────────────────────────────────────
-    useEffect(() => {
-        if (!isAuthenticated) return;
-
-        const fastInterval = setInterval(() => {
-            if (localStorage.getItem('authToken')) {
-                loadAppointments();
-                loadNotifications();
-                loadChatUnreadCount(); // ✅ poll unread chat messages
-            }
-        }, 10000);
-
-        const slowInterval = setInterval(() => {
-            if (localStorage.getItem('authToken')) {
-                loadPatients();
-                loadTestResults();
-            }
-        }, 60000);
-
-        return () => {
-            clearInterval(fastInterval);
-            clearInterval(slowInterval);
-        };
-    }, [isAuthenticated]);
-
-    // ── WebSocket ─────────────────────────────────────────────────────────────
-    useEffect(() => {
-        if (isAuthenticated && window.AdminWebSocketClient) {
-            const wsClient = new window.AdminWebSocketClient();
-            wsClient.connect();
-            window.loadAppointments      = loadAppointments;
-            window.loadPatients          = loadPatients;
-            window.loadTestResults       = loadTestResults;
-            window.loadStats             = loadStats;
-            window.showNotificationAlert = showNotificationAlert;
-            return () => {
-                wsClient.disconnect();
-                ['loadAppointments','loadPatients','loadTestResults','loadStats','showNotificationAlert']
-                    .forEach(k => delete window[k]);
-            };
-        }
-    }, [isAuthenticated]);
-
-    useEffect(() => {
-        if (patients.length > 0 || appointments.length > 0 || testResults.length > 0) loadStats();
-    }, [patients, appointments, testResults, notifications, autoNotifications]);
-
-    // ── Data loaders ─────────────────────────────────────────────────────────
-    const loadDashboardData = async () => {
-        setLoading(true);
-        try {
-            await loadPatients();
-            await Promise.all([
-                loadAppointments(), loadTestResults(),
-                loadNotifications(), loadAutoNotifications(),
-                loadChatUnreadCount(),
-            ]);
-        } catch (err) {
-            showNotificationAlert('Error loading dashboard data', 'error');
-        } finally {
-            setLoading(false);
+    const getStatusBadge = (s) => {
+        switch ((s || '').toUpperCase()) {
+            case 'SCHEDULED':    return { bg: '#d1fae5', color: '#065f46' };
+            case 'COMPLETED':    return { bg: '#dbeafe', color: '#1e40af' };
+            case 'MISSED':       return { bg: '#ffedd5', color: '#9a3412' };
+            case 'CANCELLED':    return { bg: '#fee2e2', color: '#991b1b' };
+            case 'RESCHEDULED':  return { bg: '#ede9fe', color: '#5b21b6' };
+            default:             return { bg: '#f3f4f6', color: '#6b7280' };
         }
     };
 
-    const loadPatients = async () => {
-        try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/patients?page=0&size=100`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
-            if (res.status === 401) { handleLogout(); return; }
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
-            setPatients(data.patients && Array.isArray(data.patients) ? data.patients : []);
-        } catch (err) { console.error('Error loading patients:', err); }
-    };
+    // ── Group same-patient same-datetime appointments ─────────────────────────
+    const groupAppointments = (list) => {
+        const groups = {};
+        list.forEach(apt => {
+            const dateVal = apt.appointmentDate || apt.scheduledDate || apt.date || apt.createdAt;
+            const d = parseDate(dateVal);
+            const dateKey = d
+                ? `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${d.getHours()}-${d.getMinutes()}`
+                : 'unknown';
+            const key = `${apt.patientId || apt.patientName || 'unknown'}_${dateKey}`;
 
-    const loadAppointments = async () => {
-        try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/appointments?page=0&size=200`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
-            if (res.status === 401) { handleLogout(); return; }
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
-            setAppointments(data.appointments && Array.isArray(data.appointments) ? data.appointments : []);
-        } catch (err) { console.error('Error loading appointments:', err); }
-    };
-
-    const loadTestResults = async () => {
-        try {
-            const data = await ApiService.getTestResults(0, 100);
-            setTestResults(data.results || []);
-        } catch (err) { console.error('Error loading test results:', err); }
-    };
-
-    const loadNotifications = async () => {
-        try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/notifications`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
-            if (res.ok) { const data = await res.json(); setNotifications(data.notifications || []); }
-        } catch (err) { console.error('Error loading notifications:', err); }
-    };
-
-    const loadAutoNotifications = async () => {
-        try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
-            if (res.ok) { const data = await res.json(); setAutoNotifications(data.autoNotifications || []); }
-        } catch (err) { console.error('Error loading auto-notifications:', err); }
-    };
-
-    // ✅ NEW: Poll for unread patient chat messages
-    const loadChatUnreadCount = async () => {
-        try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/all-chats`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                if (data.success && data.chats) {
-                    const unread = data.chats.filter(c =>
-                        c.status === 'NEEDS_RESPONSE' || c.conversationType === 'NEEDS_FIRST_RESPONSE'
-                    ).length;
-                    setChatUnreadCount(unread);
-                }
+            if (!groups[key]) {
+                groups[key] = {
+                    key, patientId: apt.patientId, patientName: apt.patientName,
+                    appointmentDate: dateVal, status: apt.status,
+                    paymentStatus: apt.paymentStatus, paymentMethod: apt.paymentMethod,
+                    appointments: [], totalPrice: 0,
+                };
             }
-        } catch (err) { /* silent */ }
+            groups[key].appointments.push(apt);
+            groups[key].totalPrice += parsePrice(apt.price);
+
+            const statuses = groups[key].appointments.map(a => (a.status || '').toUpperCase());
+            if (statuses.includes('SCHEDULED'))         groups[key].status = 'SCHEDULED';
+            else if (statuses.includes('RESCHEDULED'))  groups[key].status = 'RESCHEDULED';
+            else if (statuses.includes('MISSED'))       groups[key].status = 'MISSED';
+            else if (statuses.includes('COMPLETED'))    groups[key].status = 'COMPLETED';
+            else if (statuses.includes('CANCELLED'))    groups[key].status = 'CANCELLED';
+        });
+
+        return Object.values(groups).sort((a, b) => {
+            const da = parseDate(a.appointmentDate);
+            const db = parseDate(b.appointmentDate);
+            if (!da) return 1; if (!db) return -1;
+            return da - db;
+        });
     };
 
-    const loadStats = () => {
-        try {
-            const today = new Date().toDateString();
+    // ── Computed sections ────────────────────────────────────────────────────
+    const pendingPayments = useMemo(() =>
+        groupAppointments(appointments.filter(a => (a.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION')),
+        [appointments]
+    );
 
-            const todayApts = appointments.filter(apt => {
+    // Paid + missed but NOT yet rescheduled
+    const paidButMissed = useMemo(() =>
+        groupAppointments(appointments.filter(a =>
+            (a.status || '').toUpperCase() === 'MISSED' &&
+            (a.paymentStatus || '').toUpperCase() === 'PAID' &&
+            (a.rescheduleStatus || '').toUpperCase() !== 'RESCHEDULED'
+        )),
+        [appointments]
+    );
+
+    // Rescheduled (previously paid+missed, now given new slot)
+    const rescheduledGroups = useMemo(() =>
+        groupAppointments(appointments.filter(a =>
+            (a.status || '').toUpperCase() === 'RESCHEDULED' ||
+            (a.rescheduleStatus || '').toUpperCase() === 'RESCHEDULED'
+        )),
+        [appointments]
+    );
+
+    const counts = useMemo(() => ({
+        all:         appointments.length,
+        scheduled:   appointments.filter(a => (a.status || '').toUpperCase() === 'SCHEDULED').length,
+        completed:   appointments.filter(a => (a.status || '').toUpperCase() === 'COMPLETED').length,
+        missed:      appointments.filter(a => (a.status || '').toUpperCase() === 'MISSED').length,
+        cancelled:   appointments.filter(a => (a.status || '').toUpperCase() === 'CANCELLED').length,
+        rescheduled: appointments.filter(a => (a.status || '').toUpperCase() === 'RESCHEDULED').length,
+    }), [appointments]);
+
+    const filteredGroups = useMemo(() => {
+        const q = searchName.toLowerCase().trim();
+        const filtered = appointments.filter(apt => {
+            const stOk   = filterStatus  === 'all' || (apt.status || '').toLowerCase() === filterStatus;
+            const payOk  = filterPayment === 'all' || (apt.paymentStatus || '').toLowerCase() === filterPayment;
+            const nameOk = !q || (apt.patientName || '').toLowerCase().includes(q);
+            let dateOk   = true;
+            if (filterDate) {
                 const d = parseDate(apt.appointmentDate || apt.scheduledDate || apt.date || apt.createdAt);
-                return d && d.toDateString() === today;
-            }).length;
-
-            const pendingTests = appointments.filter(apt =>
-                ['scheduled', 'pending'].includes((apt.status || '').toLowerCase())
-            ).length;
-
-            const completedReports = testResults.filter(r =>
-                ['completed', 'normal'].includes((r.status || '').toLowerCase())
-            ).length;
-
-            const pendingPayments = appointments.filter(apt =>
-                (apt.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION'
-            ).length;
-
-            // Missed appointments that are paid (need follow-up)
-            const missedAppointments = appointments.filter(apt =>
-                (apt.status || '').toUpperCase() === 'MISSED' &&
-                (apt.paymentStatus || '').toUpperCase() === 'PAID'
-            ).length;
-
-            setStats({
-                totalPatients: patients.length, todayAppointments: todayApts,
-                pendingTests, completedReports,
-                totalNotifications: notifications.length,
-                activeAutoRules: autoNotifications.filter(n => n.enabled).length,
-                pendingPayments, missedAppointments,
-            });
-        } catch (err) { console.error('Error calculating stats:', err); }
-    };
-
-    // ── Actions ──────────────────────────────────────────────────────────────
-    const handleLoginSuccess = () => { setIsAuthenticated(true); loadDashboardData(); };
-
-    const handleLogout = () => {
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('user_info');
-        setIsAuthenticated(false);
-        setPatients([]); setAppointments([]); setTestResults([]);
-        setNotifications([]); setAutoNotifications([]);
-        setChatUnreadCount(0);
-    };
-
-    const handleUpdateAppointment = async (appointmentId, newStatus) => {
-        try {
-            const res = await ApiService.updateAppointmentStatus(appointmentId, newStatus);
-            if (res.ok) {
-                showNotificationAlert(`Appointment ${newStatus.toLowerCase()} successfully!`);
-                await loadAppointments();
-            } else {
-                const err = await res.json();
-                showNotificationAlert(err.message || 'Error updating appointment', 'error');
+                dateOk = d ? d.toDateString() === new Date(filterDate).toDateString() : false;
             }
-        } catch (err) { showNotificationAlert('Network error while updating appointment', 'error'); }
+            return stOk && payOk && nameOk && dateOk;
+        });
+        return groupAppointments(filtered);
+    }, [appointments, filterStatus, filterPayment, filterDate, searchName]);
+
+    // ── API helpers ──────────────────────────────────────────────────────────
+    const apiPatch = async (url) => {
+        const token = localStorage.getItem('authToken');
+        const res = await fetch(`${CONFIG.ADMIN_API_URL}${url}`, {
+            method: 'PATCH', headers: { Authorization: `Bearer ${token}` },
+        });
+        return res.json();
     };
 
-    const handleAddResult = async (resultData) => {
+    const apiPut = async (url, body) => {
+        const token = localStorage.getItem('authToken');
+        const res = await fetch(`${CONFIG.ADMIN_API_URL}${url}`, {
+            method: 'PUT',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: body ? JSON.stringify(body) : undefined,
+        });
+        return res.json();
+    };
+
+    const handleApprovePayment = async (group) => {
+        if (!window.confirm(`Confirm receipt of ${formatNaira(group.totalPrice)} for ${group.appointments.length} test(s) from ${group.patientName}?`)) return;
+        for (const apt of group.appointments) {
+            setActionLoading(apt.id + '-pay');
+            try {
+                const data = await apiPatch(`/api/admin/appointments/${apt.id}/approve-payment`);
+                if (!data.success) { alert(data.message || `Failed to approve #${apt.id}`); setActionLoading(null); return; }
+            } catch (err) { alert('Network error: ' + err.message); setActionLoading(null); return; }
+        }
+        setActionLoading(null);
+        window.showNotificationAlert && window.showNotificationAlert(`Payment approved for ${group.patientName} ✅`);
+        onRefresh && onRefresh();
+    };
+
+    const handleMarkMissed = async (aptId) => {
+        setActionLoading(aptId + '-miss');
         try {
-            const hasFiles = resultData.attachments && resultData.attachments.length > 0;
-            let response;
-            if (hasFiles) {
-                const fd = new FormData();
-                fd.append('patientId', resultData.patientId);
-                fd.append('testType', resultData.testType);
-                fd.append('result', resultData.result || '');
-                fd.append('notes', resultData.notes || '');
-                fd.append('category', resultData.category || 'General');
-                fd.append('status', resultData.status || 'COMPLETED');
-                fd.append('doctorName', resultData.doctorName || 'Admin');
-                fd.append('testDate', resultData.testDate || new Date().toISOString());
-                if (resultData.appointmentId) fd.append('appointmentId', resultData.appointmentId);
-                fd.append('markCompleted', resultData.markAppointmentCompleted || false);
-                const att = resultData.attachments[0];
-                const b64 = att.data.split(',')[1];
-                const bytes = atob(b64);
-                const arr = new Uint8Array(bytes.length);
-                for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-                fd.append('file', new File([new Blob([arr], { type: att.type })], att.name, { type: att.type }));
-                const token = localStorage.getItem('authToken');
-                const fetchRes = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/upload-result-with-file`, {
-                    method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd
+            const data = await apiPatch(`/api/admin/appointments/${aptId}/mark-missed`);
+            if (data.success) { window.showNotificationAlert && window.showNotificationAlert('Marked as missed'); onRefresh && onRefresh(); }
+            else alert(data.message || 'Could not mark as missed');
+        } catch (err) { alert('Network error: ' + err.message); }
+        finally { setActionLoading(null); }
+    };
+
+    const handleUpdateStatus = async (aptId, newStatus) => {
+        setActionLoading(aptId + '-status');
+        try {
+            const data = await apiPut(`/api/admin/appointments/${aptId}/status?status=${newStatus}`);
+            if (data.success) { window.showNotificationAlert && window.showNotificationAlert(`Status → ${newStatus}`); onRefresh && onRefresh(); }
+            else alert(data.message || 'Failed to update status');
+        } catch (err) { alert('Network error: ' + err.message); }
+        finally { setActionLoading(null); }
+    };
+
+    const handleGroupStatus = async (group, newStatus) => {
+        for (const apt of group.appointments) await handleUpdateStatus(apt.id, newStatus);
+    };
+
+    // ── Reschedule: set new date/time for all apts in group ───────────────────
+    const handleReschedule = async () => {
+        if (!rescheduleDate || !rescheduleTime) { alert('Please select both a date and time.'); return; }
+        setRescheduling(true);
+        try {
+            const group = rescheduleModal;
+            for (const apt of group.appointments) {
+                await apiPut(`/api/admin/appointments/${apt.id}`, {
+                    scheduledDate: rescheduleDate,
+                    scheduledTime: rescheduleTime,
+                    status: 'RESCHEDULED',
+                    rescheduleStatus: 'RESCHEDULED',
                 });
-                if (!fetchRes.ok) throw new Error(`Server returned ${fetchRes.status}`);
-                response = await fetchRes.json();
-            } else {
-                response = await ApiService.addTestResult(resultData);
             }
-            if (response.success) {
-                showNotificationAlert('Test result added successfully!');
-                setShowModal(null);
-                await loadTestResults();
-            } else { showNotificationAlert(response.message || 'Failed to add result', 'error'); }
-        } catch (err) { showNotificationAlert('Error: ' + err.message, 'error'); }
+            window.showNotificationAlert && window.showNotificationAlert(
+                `Rescheduled ${group.appointments.length} test(s) for ${group.patientName} ✅`
+            );
+            setRescheduleModal(null);
+            setRescheduleDate('');
+            setRescheduleTime('');
+            onRefresh && onRefresh();
+        } catch (err) {
+            alert('Error rescheduling: ' + err.message);
+        } finally {
+            setRescheduling(false);
+        }
     };
 
-    const handleSendNotification = async () => {
-        if (!formData.title.trim() || !formData.message.trim()) { showNotificationAlert('Fill in all fields', 'error'); return; }
-        if (!formData.sendToAll && !formData.recipientId) { showNotificationAlert('Select a patient or "Send to All"', 'error'); return; }
-        setLoading(true);
+    const openEditTests = (group) => {
+        setEditingGroup(group);
+        setEditTests(group.appointments.map(a => ({
+            id: a.id, testType: a.testType || a.reason || '',
+            price: a.price || '', original: a.testType || a.reason || '',
+        })));
+    };
+
+    const saveEditedTests = async () => {
+        setSavingTests(true);
         try {
-            const token = localStorage.getItem('authToken');
-            const endpoint = formData.sendToAll
-                ? `${CONFIG.ADMIN_API_URL}/api/admin/notifications/send-all`
-                : `${CONFIG.ADMIN_API_URL}/api/admin/notifications/send`;
-            const payload = formData.sendToAll
-                ? { title: formData.title, message: formData.message, type: formData.type }
-                : { recipientId: parseInt(formData.recipientId), title: formData.title, message: formData.message, type: formData.type };
-            const res = await fetch(endpoint, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-            if (res.ok) {
-                showNotificationAlert('Notification sent!');
-                setFormData({ recipientId: '', title: '', message: '', type: 'appointment', sendToAll: false });
-                setShowNotificationForm(false);
-                loadNotifications();
-            } else { showNotificationAlert('Failed to send notification', 'error'); }
-        } catch (err) { showNotificationAlert('Error sending notification', 'error'); }
-        finally { setLoading(false); }
+            for (const t of editTests) {
+                await apiPut(`/api/admin/appointments/${t.id}`, { testType: t.testType, price: t.price });
+            }
+            window.showNotificationAlert && window.showNotificationAlert('Tests updated ✅');
+            setEditingGroup(null); setEditTests([]);
+            onRefresh && onRefresh();
+        } catch (err) { alert('Error saving: ' + err.message); }
+        finally { setSavingTests(false); }
     };
 
-    const handleCreateAutoNotification = async () => {
-        if (!autoFormData.title.trim() || !autoFormData.message.trim()) { showNotificationAlert('Fill in all fields', 'error'); return; }
-        setLoading(true);
-        try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify(autoFormData),
-            });
-            if (res.ok) {
-                showNotificationAlert('Auto-notification created!');
-                setAutoFormData({ trigger: 'appointment_scheduled', title: '', message: '', type: 'appointment', enabled: true, delayMinutes: 0 });
-                setShowAutoNotificationForm(false);
-                loadAutoNotifications();
-            } else { showNotificationAlert('Failed to create auto-notification', 'error'); }
-        } catch (err) { showNotificationAlert('Error creating auto-notification', 'error'); }
-        finally { setLoading(false); }
-    };
+    // ── Section pill ─────────────────────────────────────────────────────────
+    const SectionPill = ({ id, label, count, alertCount }) => (
+        <button
+            onClick={() => setActiveSection(id)}
+            style={{
+                padding: '8px 16px', borderRadius: '8px',
+                border: `2px solid ${activeSection === id ? '#667eea' : '#e5e7eb'}`,
+                background: activeSection === id ? '#667eea' : 'white',
+                color: activeSection === id ? 'white' : '#374151',
+                fontWeight: '700', fontSize: '13px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: '6px', position: 'relative',
+            }}
+        >
+            {label}
+            {count !== undefined && (
+                <span style={{
+                    padding: '1px 7px', borderRadius: '12px',
+                    background: activeSection === id ? 'rgba(255,255,255,0.25)' : '#f3f4f6',
+                    color: activeSection === id ? 'white' : '#6b7280',
+                    fontSize: '11px', fontWeight: '700',
+                }}>{count}</span>
+            )}
+            {alertCount > 0 && (
+                <span style={{
+                    position: 'absolute', top: '-6px', right: '-6px',
+                    width: '16px', height: '16px', borderRadius: '50%',
+                    background: '#ef4444', color: 'white',
+                    fontSize: '9px', fontWeight: '900',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>{alertCount}</span>
+            )}
+        </button>
+    );
 
-    const handleDeleteNotification = async (id) => {
-        if (!window.confirm('Delete this notification?')) return;
-        try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/notifications/${id}`, {
-                method: 'DELETE', headers: { Authorization: `Bearer ${token}` }
-            });
-            if (res.ok) { setNotifications(notifications.filter(n => n.id !== id)); showNotificationAlert('Notification deleted'); }
-        } catch (err) { console.error(err); }
-    };
+    // ── Group card ────────────────────────────────────────────────────────────
+    const GroupCard = ({ group, showRescheduleBtn = false }) => {
+        const sb = getStatusBadge(group.status);
+        const pb = getPaymentBadge(group.paymentStatus);
+        const aptDate = parseDate(group.appointmentDate);
+        const isPast = aptDate && aptDate < new Date();
+        const isSchd = (group.status || '').toUpperCase() === 'SCHEDULED';
+        const isRescheduled = (group.status || '').toUpperCase() === 'RESCHEDULED';
+        const isPending = (group.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION';
+        const isMissedPaid =
+            (group.status || '').toUpperCase() === 'MISSED' &&
+            (group.paymentStatus || '').toUpperCase() === 'PAID';
+        const isGroupLoading = group.appointments.some(a =>
+            actionLoading === a.id + '-pay' ||
+            actionLoading === a.id + '-status' ||
+            actionLoading === a.id + '-miss'
+        );
 
-    const handleToggleAutoNotification = async (id, current) => {
-        try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications/${id}/toggle`, {
-                method: 'PUT',
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: !current }),
-            });
-            if (res.ok) loadAutoNotifications();
-        } catch (err) { console.error(err); }
-    };
+        const borderColor = isPending ? '#fbbf24' : isMissedPaid ? '#f97316' : isRescheduled ? '#8b5cf6' : '#e5e7eb';
+        const shadow = isPending ? '0 2px 8px rgba(251,191,36,0.15)'
+            : isMissedPaid ? '0 2px 8px rgba(249,115,22,0.15)'
+            : isRescheduled ? '0 2px 8px rgba(139,92,246,0.15)'
+            : '0 1px 3px rgba(0,0,0,0.05)';
 
-    const handleDeleteAutoNotification = async (id) => {
-        if (!window.confirm('Delete this auto-notification?')) return;
-        try {
-            const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications/${id}`, {
-                method: 'DELETE', headers: { Authorization: `Bearer ${token}` }
-            });
-            if (res.ok) { setAutoNotifications(autoNotifications.filter(n => n.id !== id)); showNotificationAlert('Auto-notification deleted'); }
-        } catch (err) { console.error(err); }
-    };
+        return (
+            <div style={{ background: 'white', border: `1.5px solid ${borderColor}`, borderRadius: '10px', padding: '12px 14px', marginBottom: '10px', boxShadow: shadow }}>
+                {/* Row 1: avatar + name + date + badges */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                    <div style={{
+                        width: '34px', height: '34px', borderRadius: '50%', flexShrink: 0,
+                        background: 'linear-gradient(135deg, #667eea, #764ba2)',
+                        color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontWeight: '700', fontSize: '12px',
+                    }}>
+                        {group.patientName ? group.patientName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'U'}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: '700', fontSize: '14px', color: '#111827' }}>
+                            {group.patientName || 'Unknown Patient'}
+                            <span style={{ fontWeight: '400', color: '#9ca3af', fontSize: '11px', marginLeft: '6px' }}>
+                                ID: {group.patientId || 'N/A'}
+                            </span>
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '1px' }}>
+                            📅 {fmtDate(group.appointmentDate)}
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: 'flex-end', flexShrink: 0 }}>
+                        <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: '700', background: sb.bg, color: sb.color, whiteSpace: 'nowrap' }}>
+                            {group.status || 'Unknown'}
+                        </span>
+                        <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: '600', background: pb.bg, color: pb.color, whiteSpace: 'nowrap' }}>
+                            {pb.icon} {pb.label}
+                        </span>
+                    </div>
+                </div>
 
-    const filteredPatients = patients.filter(p => {
-        const name  = `${p.firstName || ''} ${p.lastName || ''}`.toLowerCase();
-        const email = (p.email || '').toLowerCase();
-        const q     = searchQuery.toLowerCase();
-        return name.includes(q) || email.includes(q);
-    });
+                {/* Row 2: tests breakdown */}
+                <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '7px', padding: '8px 10px', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                        <span style={{ fontSize: '10px', fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                            {group.appointments.length} Test{group.appointments.length > 1 ? 's' : ''}
+                        </span>
+                        <button
+                            onClick={() => openEditTests(group)}
+                            style={{ fontSize: '10px', fontWeight: '700', color: '#667eea', background: '#ede9fe', border: 'none', borderRadius: '5px', padding: '2px 8px', cursor: 'pointer' }}
+                        >
+                            ✏️ Edit Tests
+                        </button>
+                    </div>
+                    {group.appointments.map((apt, i) => (
+                        <div key={apt.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', paddingTop: i > 0 ? '4px' : '0', borderTop: i > 0 ? '1px solid #e5e7eb' : 'none', marginTop: i > 0 ? '4px' : '0' }}>
+                            <span style={{ color: '#374151', fontWeight: '500' }}>🧪 {apt.testType || apt.reason || 'Medical Test'}</span>
+                            <span style={{ color: '#059669', fontWeight: '700', flexShrink: 0, marginLeft: '8px' }}>{apt.price || '—'}</span>
+                        </div>
+                    ))}
+                    {group.appointments.length > 1 && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: '800', color: '#111827', borderTop: '2px solid #d1d5db', marginTop: '6px', paddingTop: '6px' }}>
+                            <span>Total</span>
+                            <span style={{ color: '#059669' }}>{formatNaira(group.totalPrice)}</span>
+                        </div>
+                    )}
+                </div>
 
-    const getTriggerLabel = (t) => ({
-        appointment_scheduled: 'Appointment Scheduled', results_ready: 'Results Ready',
-        appointment_reminder: 'Appointment Reminder', test_booked: 'Test Booked',
-        payment_approved: 'Payment Approved', appointment_missed: 'Appointment Missed',
-    }[t] || t);
-
-    const getTypeIcon = (t) => ({ appointment: '📅', results: '📊', alert: '⚠️', reminder: '🔔', payment: '💰' }[t] || '📬');
-    const getCurrentUser = () => { try { return JSON.parse(localStorage.getItem('user_info') || '{}'); } catch { return {}; } };
-
-    // ── Guards ────────────────────────────────────────────────────────────────
-    if (validatingToken) {
-        return <div className="loading"><div className="spinner"></div><p>Verifying session...</p></div>;
-    }
-    if (!isAuthenticated) {
-        return React.createElement(Login, { onLoginSuccess: handleLoginSuccess });
-    }
-    if (loading && patients.length === 0) {
-        return <div className="loading"><div className="spinner"></div><p>Loading dashboard...</p></div>;
-    }
-
-    // ── Render ────────────────────────────────────────────────────────────────
-    return (
-        <div className="dashboard" style={{ display: 'flex', minHeight: '100vh' }}>
-            {React.createElement(Sidebar, { currentView, setCurrentView, onLogout: handleLogout })}
-
-            <div className="main-content" style={{ flex: 1, overflowY: 'auto' }}>
-                {React.createElement(Header)}
-
-                {notification && (
-                    <div className={`alert alert-${notification.type}`}>
-                        <i className={`fas ${notification.type === 'success' ? 'fa-check-circle' : 'fa-exclamation-triangle'}`}></i>
-                        {' '}{notification.message}
+                {/* Pending payment notice */}
+                {isPending && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fef3c7', border: '1px solid #fbbf24', borderRadius: '7px', padding: '7px 10px', marginBottom: '8px' }}>
+                        <div style={{ fontSize: '11px', color: '#92400e', fontWeight: '600' }}>
+                            📲 Patient clicked "I Have Paid" — verify Sterling Bank (0089364407) and approve
+                        </div>
+                        <button
+                            onClick={() => handleApprovePayment(group)}
+                            disabled={isGroupLoading}
+                            style={{ padding: '4px 12px', background: '#059669', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '700', fontSize: '11px', marginLeft: '10px', whiteSpace: 'nowrap', opacity: isGroupLoading ? 0.6 : 1 }}
+                        >
+                            {isGroupLoading ? '...' : '✅ Approve'}
+                        </button>
                     </div>
                 )}
 
-                {/* ── DASHBOARD ── */}
-                {currentView === 'dashboard' && (
-                    <div>
-                        {React.createElement(StatsGrid, { stats })}
-
-                        {/* Pending payments banner */}
-                        {stats.pendingPayments > 0 && (
-                            <div style={{ margin: '0 20px 20px', padding: '14px 18px', background: '#fef3c7', border: '2px solid #fbbf24', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <div style={{ fontWeight: '700', color: '#92400e', fontSize: '15px' }}>
-                                    ⏳ {stats.pendingPayments} payment{stats.pendingPayments > 1 ? 's' : ''} awaiting confirmation
-                                </div>
-                                <button onClick={() => setCurrentView('appointments')}
-                                    style={{ padding: '8px 18px', background: '#d97706', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>
-                                    Review →
-                                </button>
-                            </div>
-                        )}
-
-                        {/* ✅ REMOVED: missed appointments banner — no longer shown on dashboard */}
-
-                        <div className="content-grid">
-                            {React.createElement(MainPanel, {
-                                patients: filteredPatients, searchQuery, setSearchQuery,
-                                setSelectedPatient, setShowModal,
-                                onUpdateAppointment: handleUpdateAppointment,
-                            })}
-                            {React.createElement(SidePanel, {
-                                appointments, setShowModal, onRefresh: loadAppointments,
-                            })}
+                {/* Paid but missed notice */}
+                {isMissedPaid && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff7ed', border: '1px solid #f97316', borderRadius: '7px', padding: '7px 10px', marginBottom: '8px' }}>
+                        <div style={{ fontSize: '11px', color: '#9a3412', fontWeight: '600' }}>
+                            💸 Patient paid but missed. Offer a refund or reschedule below.
                         </div>
+                        <button
+                            onClick={() => { setRescheduleModal(group); setRescheduleDate(''); setRescheduleTime(''); }}
+                            style={{ padding: '4px 12px', background: '#7c3aed', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '700', fontSize: '11px', marginLeft: '10px', whiteSpace: 'nowrap' }}
+                        >
+                            📅 Reschedule
+                        </button>
                     </div>
                 )}
 
-                {/* ── PATIENTS ── */}
-                {currentView === 'patients' && React.createElement(PatientsView, {
-                    patients: filteredPatients, searchQuery, setSearchQuery,
-                    setSelectedPatient, setShowModal,
-                    onUpdateAppointment: handleUpdateAppointment,
-                })}
-
-                {/* ── APPOINTMENTS ── */}
-                {currentView === 'appointments' && React.createElement(AppointmentsView, {
-                    appointments, setShowModal, onRefresh: loadAppointments,
-                })}
-
-                {/* ── REPORTS ── */}
-                {currentView === 'reports' && React.createElement(ReportsView, { testResults, setShowModal })}
-
-                {/* ── NOTIFICATIONS ── */}
-                {currentView === 'notifications' && (
-                    <div style={{ padding: '20px', maxWidth: '1200px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                            <h2 style={{ fontSize: '28px', fontWeight: 'bold' }}>Notification Manager</h2>
+                {/* Rescheduled notice */}
+                {isRescheduled && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f5f3ff', border: '1px solid #8b5cf6', borderRadius: '7px', padding: '7px 10px', marginBottom: '8px' }}>
+                        <div style={{ fontSize: '11px', color: '#5b21b6', fontWeight: '600' }}>
+                            🔁 Rescheduled — awaiting new appointment attendance
                         </div>
+                        <button
+                            onClick={() => handleGroupStatus(group, 'COMPLETED')}
+                            disabled={!!actionLoading}
+                            style={{ padding: '4px 12px', background: '#1e40af', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '700', fontSize: '11px', marginLeft: '10px', whiteSpace: 'nowrap' }}
+                        >
+                            ✓ Mark Completed
+                        </button>
+                    </div>
+                )}
 
-                        <div style={{ borderBottom: '1px solid #ccc', marginBottom: '20px' }}>
-                            {['sent', 'auto'].map(tab => (
-                                <button key={tab} onClick={() => setNotificationTab(tab)} style={{ padding: '10px 20px', borderBottom: notificationTab === tab ? '3px solid #007bff' : 'none', background: 'none', border: 'none', cursor: 'pointer', fontWeight: notificationTab === tab ? 'bold' : 'normal' }}>
-                                    {tab === 'sent' ? 'Send Notifications' : 'Auto Notifications'}
-                                </button>
-                            ))}
-                        </div>
-
-                        {notificationTab === 'sent' && (
-                            <div>
-                                <button onClick={() => setShowNotificationForm(!showNotificationForm)} style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginBottom: '20px' }}>
-                                    Send New Notification
-                                </button>
-                                {showNotificationForm && (
-                                    <div style={{ background: '#f5f5f5', padding: '20px', borderRadius: '5px', marginBottom: '20px' }}>
-                                        <label style={{ display: 'block', marginBottom: '10px' }}>
-                                            <input type="checkbox" checked={formData.sendToAll} onChange={e => setFormData({ ...formData, sendToAll: e.target.checked })} />
-                                            {' '}Send to All Patients
-                                        </label>
-                                        {!formData.sendToAll && (
-                                            <div style={{ marginBottom: '10px' }}>
-                                                <label style={{ display: 'block', marginBottom: '5px' }}>Select Patient ({patients.length} available)</label>
-                                                <select value={formData.recipientId} onChange={e => setFormData({ ...formData, recipientId: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
-                                                    <option value="">Choose a patient...</option>
-                                                    {patients.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.email})</option>)}
-                                                </select>
-                                            </div>
-                                        )}
-                                        <div style={{ marginBottom: '10px' }}>
-                                            <label style={{ display: 'block', marginBottom: '5px' }}>Type</label>
-                                            <select value={formData.type} onChange={e => setFormData({ ...formData, type: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
-                                                <option value="appointment">Appointment</option>
-                                                <option value="results">Results</option>
-                                                <option value="alert">Alert</option>
-                                                <option value="reminder">Reminder</option>
-                                                <option value="payment">Payment</option>
-                                            </select>
-                                        </div>
-                                        <div style={{ marginBottom: '10px' }}>
-                                            <label style={{ display: 'block', marginBottom: '5px' }}>Title</label>
-                                            <input type="text" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} placeholder="Title" maxLength="100" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
-                                        </div>
-                                        <div style={{ marginBottom: '10px' }}>
-                                            <label style={{ display: 'block', marginBottom: '5px' }}>Message</label>
-                                            <textarea value={formData.message} onChange={e => setFormData({ ...formData, message: e.target.value })} placeholder="Message" maxLength="500" rows="4" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
-                                        </div>
-                                        <button onClick={handleSendNotification} disabled={loading} style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}>
-                                            {loading ? 'Sending...' : 'Send'}
-                                        </button>
-                                        <button onClick={() => setShowNotificationForm(false)} style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Cancel</button>
-                                    </div>
-                                )}
-                                <div style={{ marginTop: '20px' }}>
-                                    <h3>Sent Notifications ({notifications.length})</h3>
-                                    {notifications.length === 0 ? <p>No notifications sent</p> : notifications.map(notif => (
-                                        <div key={notif.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                                                <div>
-                                                    <h4 style={{ margin: '0 0 5px' }}>{notif.title}</h4>
-                                                    <p style={{ margin: '0 0 5px', color: '#666' }}>{notif.message}</p>
-                                                    <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>To: {notif.recipientName || 'All Patients'} | {new Date(notif.createdAt).toLocaleString()}</p>
-                                                </div>
-                                                <button onClick={() => handleDeleteNotification(notif.id)} style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Delete</button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
+                {/* Scheduled action buttons */}
+                {isSchd && (
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <button onClick={() => handleGroupStatus(group, 'COMPLETED')} disabled={!!actionLoading}
+                            style={{ padding: '4px 12px', background: '#1e40af', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>
+                            ✓ Mark Done
+                        </button>
+                        {isPast && (
+                            <button onClick={() => { if (window.confirm('Mark all as missed?')) group.appointments.forEach(a => handleMarkMissed(a.id)); }}
+                                disabled={!!actionLoading}
+                                style={{ padding: '4px 12px', background: '#ea580c', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>
+                                ⚠ Missed
+                            </button>
                         )}
-
-                        {notificationTab === 'auto' && (
-                            <div>
-                                <button onClick={() => setShowAutoNotificationForm(!showAutoNotificationForm)} style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginBottom: '20px' }}>
-                                    Create Auto Notification
-                                </button>
-                                {showAutoNotificationForm && (
-                                    <div style={{ background: '#f5f5f5', padding: '20px', borderRadius: '5px', marginBottom: '20px' }}>
-                                        <div style={{ marginBottom: '10px' }}>
-                                            <label style={{ display: 'block', marginBottom: '5px' }}>Trigger Event</label>
-                                            <select value={autoFormData.trigger} onChange={e => setAutoFormData({ ...autoFormData, trigger: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
-                                                <option value="appointment_scheduled">Appointment Scheduled</option>
-                                                <option value="results_ready">Results Ready</option>
-                                                <option value="appointment_reminder">Appointment Reminder</option>
-                                                <option value="test_booked">Test Booked</option>
-                                                <option value="payment_approved">Payment Approved</option>
-                                                <option value="appointment_missed">Appointment Missed</option>
-                                            </select>
-                                        </div>
-                                        <div style={{ marginBottom: '10px' }}>
-                                            <label style={{ display: 'block', marginBottom: '5px' }}>Delay (minutes)</label>
-                                            <input type="number" value={autoFormData.delayMinutes} onChange={e => setAutoFormData({ ...autoFormData, delayMinutes: parseInt(e.target.value) || 0 })} min="0" max="1440" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
-                                        </div>
-                                        <div style={{ marginBottom: '10px' }}>
-                                            <label style={{ display: 'block', marginBottom: '5px' }}>Type</label>
-                                            <select value={autoFormData.type} onChange={e => setAutoFormData({ ...autoFormData, type: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
-                                                <option value="appointment">Appointment</option>
-                                                <option value="results">Results</option>
-                                                <option value="alert">Alert</option>
-                                                <option value="reminder">Reminder</option>
-                                                <option value="payment">Payment</option>
-                                            </select>
-                                        </div>
-                                        <div style={{ marginBottom: '10px' }}>
-                                            <label style={{ display: 'block', marginBottom: '5px' }}>Title</label>
-                                            <input type="text" value={autoFormData.title} onChange={e => setAutoFormData({ ...autoFormData, title: e.target.value })} placeholder="Title" maxLength="100" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
-                                        </div>
-                                        <div style={{ marginBottom: '10px' }}>
-                                            <label style={{ display: 'block', marginBottom: '5px' }}>Message</label>
-                                            <textarea value={autoFormData.message} onChange={e => setAutoFormData({ ...autoFormData, message: e.target.value })} placeholder="Message" maxLength="500" rows="4" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
-                                        </div>
-                                        <button onClick={handleCreateAutoNotification} disabled={loading} style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}>
-                                            {loading ? 'Creating...' : 'Create'}
-                                        </button>
-                                        <button onClick={() => setShowAutoNotificationForm(false)} style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Cancel</button>
-                                    </div>
-                                )}
-                                <div style={{ marginTop: '20px' }}>
-                                    <h3>Auto Notifications</h3>
-                                    {autoNotifications.length === 0 ? <p>No auto notifications configured</p> : autoNotifications.map(an => (
-                                        <div key={an.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                                                <div style={{ flex: 1 }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                                                        <h4 style={{ margin: 0, marginRight: '10px' }}>{an.title}</h4>
-                                                        <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '12px', background: an.enabled ? '#d4edda' : '#f8d7da', color: an.enabled ? '#155724' : '#721c24' }}>
-                                                            {an.enabled ? 'Active' : 'Disabled'}
-                                                        </span>
-                                                    </div>
-                                                    <p style={{ margin: '5px 0', color: '#666' }}>{an.message}</p>
-                                                    <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>Trigger: {getTriggerLabel(an.trigger)} | Delay: {an.delayMinutes} min | {getTypeIcon(an.type)} {an.type}</p>
-                                                </div>
-                                                <div style={{ display: 'flex', gap: '5px' }}>
-                                                    <button onClick={() => handleToggleAutoNotification(an.id, an.enabled)} style={{ padding: '5px 10px', background: an.enabled ? '#ffc107' : '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
-                                                        {an.enabled ? 'Disable' : 'Enable'}
-                                                    </button>
-                                                    <button onClick={() => handleDeleteAutoNotification(an.id)} style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Delete</button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
+                        <button onClick={() => { if (window.confirm('Cancel all?')) handleGroupStatus(group, 'CANCELLED'); }}
+                            disabled={!!actionLoading}
+                            style={{ padding: '4px 12px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>
+                            ✕ Cancel
+                        </button>
                     </div>
                 )}
             </div>
+        );
+    };
 
-            {/* ══ MODALS ══ */}
-            {showModal === 'add-result' && React.createElement(AddResultModal, {
-                patients, appointments,
-                onClose: () => setShowModal(null),
-                onAdd: handleAddResult,
-                showNotification: showNotificationAlert,
-            })}
+    // ── Section header banner ─────────────────────────────────────────────────
+    const SectionBanner = ({ icon, title, subtitle, count, bg, border, countBg }) => (
+        <div style={{ background: bg, border: `2px solid ${border}`, borderRadius: '12px', padding: '12px 16px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ fontSize: '26px' }}>{icon}</div>
+            <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '15px', fontWeight: '800', color: '#111827' }}>{title}</div>
+                <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>{subtitle}</div>
+            </div>
+            <div style={{ background: countBg, color: 'white', padding: '6px 14px', borderRadius: '8px', fontSize: '18px', fontWeight: '900', minWidth: '40px', textAlign: 'center' }}>
+                {count}
+            </div>
+        </div>
+    );
 
-            {showModal === 'patient-details' && selectedPatient && React.createElement(PatientDetailsModal, {
-                patient: selectedPatient,
-                testResults: testResults.filter(r => r.patientId === selectedPatient.id),
-                appointments: appointments.filter(a => a.patientId === selectedPatient.id),
-                onClose: () => { setShowModal(null); setSelectedPatient(null); },
-                showNotification: showNotificationAlert,
-                loadTestResults,
-            })}
+    const EmptyState = ({ emoji, title, sub }) => (
+        <div style={{ textAlign: 'center', padding: '40px 20px', background: 'white', borderRadius: '12px', border: '2px dashed #e5e7eb' }}>
+            <div style={{ fontSize: '44px', marginBottom: '8px' }}>{emoji}</div>
+            <div style={{ fontSize: '15px', fontWeight: '700', color: '#374151', marginBottom: '4px' }}>{title}</div>
+            <div style={{ fontSize: '12px', color: '#9ca3af' }}>{sub}</div>
+        </div>
+    );
 
-            {showSupportChat && window.ChatSupportModal && React.createElement(window.ChatSupportModal, {
-                onClose: () => {
-                    setShowSupportChat(false);
-                    setSupportChatPatient(null);
-                    // ✅ Clear badge when chat is opened and closed
-                    setChatUnreadCount(0);
-                },
-                isAdmin: true,
-                currentUser: getCurrentUser(),
-                selectedPatient: supportChatPatient,
-            })}
+    // ════════════════════════════════════════════════════════════════════════
+    return (
+        <div style={{ padding: '0' }}>
 
-            {/* ✅ Floating support button WITH unread badge */}
-            {!showSupportChat && (
-                <button
-                    onClick={() => {
-                        setSupportChatPatient(null);
-                        setShowSupportChat(true);
-                        setChatUnreadCount(0); // clear badge on open
-                    }}
-                    title="Open Patient Support Chat"
-                    style={{
-                        position: 'fixed', bottom: '24px', right: '24px',
-                        width: '56px', height: '56px', borderRadius: '50%',
-                        backgroundColor: '#3b82f6', color: 'white', border: 'none',
-                        cursor: 'pointer', display: 'flex', alignItems: 'center',
-                        justifyContent: 'center', fontSize: '20px',
-                        boxShadow: '0 4px 14px rgba(59,130,246,0.5)', zIndex: 999,
-                        transition: 'transform 0.15s',
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
-                >
-                    <i className="fas fa-headset"></i>
-                    {/* ✅ NEW: unread message badge */}
-                    {chatUnreadCount > 0 && (
-                        <span style={{
-                            position: 'absolute',
-                            top: '-4px', right: '-4px',
-                            minWidth: '20px', height: '20px',
-                            borderRadius: '10px',
-                            backgroundColor: '#ef4444',
-                            color: 'white',
-                            fontSize: '11px',
-                            fontWeight: '900',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: '0 4px',
-                            border: '2px solid white',
-                            zIndex: 1000,
-                        }}>
-                            {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
-                        </span>
-                    )}
-                </button>
+            {/* ── Reschedule Modal ── */}
+            {rescheduleModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+                    <div style={{ background: 'white', borderRadius: '14px', padding: '22px', width: '100%', maxWidth: '400px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+                        <div style={{ fontSize: '16px', fontWeight: '800', color: '#111827', marginBottom: '3px' }}>📅 Reschedule Appointment</div>
+                        <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '18px' }}>
+                            {rescheduleModal.patientName} · {rescheduleModal.appointments.length} test(s) · {formatNaira(rescheduleModal.totalPrice)}
+                        </div>
+                        <div style={{ marginBottom: '12px' }}>
+                            <label style={{ fontSize: '11px', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '4px' }}>New Date</label>
+                            <input type="date" value={rescheduleDate} onChange={e => setRescheduleDate(e.target.value)}
+                                min={new Date().toISOString().split('T')[0]}
+                                style={{ width: '100%', padding: '8px 10px', borderRadius: '7px', border: '1.5px solid #d1d5db', fontSize: '13px', boxSizing: 'border-box' }} />
+                        </div>
+                        <div style={{ marginBottom: '18px' }}>
+                            <label style={{ fontSize: '11px', fontWeight: '700', color: '#374151', display: 'block', marginBottom: '4px' }}>New Time</label>
+                            <input type="time" value={rescheduleTime} onChange={e => setRescheduleTime(e.target.value)}
+                                style={{ width: '100%', padding: '8px 10px', borderRadius: '7px', border: '1.5px solid #d1d5db', fontSize: '13px', boxSizing: 'border-box' }} />
+                        </div>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button onClick={() => setRescheduleModal(null)}
+                                style={{ flex: 1, padding: '10px', background: '#f3f4f6', color: '#374151', border: '1.5px solid #e5e7eb', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', fontSize: '13px' }}>
+                                Cancel
+                            </button>
+                            <button onClick={handleReschedule} disabled={rescheduling || !rescheduleDate || !rescheduleTime}
+                                style={{ flex: 2, padding: '10px', background: rescheduling ? '#9ca3af' : '#7c3aed', color: 'white', border: 'none', borderRadius: '8px', cursor: rescheduling ? 'not-allowed' : 'pointer', fontWeight: '700', fontSize: '13px' }}>
+                                {rescheduling ? 'Saving...' : '📅 Confirm Reschedule'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Edit Tests Modal ── */}
+            {editingGroup && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+                    <div style={{ background: 'white', borderRadius: '14px', padding: '22px', width: '100%', maxWidth: '460px', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+                        <div style={{ fontSize: '16px', fontWeight: '800', color: '#111827', marginBottom: '3px' }}>✏️ Edit Tests</div>
+                        <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '16px' }}>
+                            {editingGroup.patientName} · {fmtDate(editingGroup.appointmentDate)}
+                        </div>
+                        {editTests.map((t, i) => (
+                            <div key={t.id} style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px', marginBottom: '10px' }}>
+                                <div style={{ fontSize: '10px', fontWeight: '700', color: '#6b7280', marginBottom: '8px', textTransform: 'uppercase' }}>Test {i + 1}</div>
+                                <div style={{ marginBottom: '8px' }}>
+                                    <label style={{ fontSize: '11px', color: '#374151', fontWeight: '600', display: 'block', marginBottom: '3px' }}>Test Name</label>
+                                    <input value={t.testType} onChange={e => { const u = [...editTests]; u[i] = { ...u[i], testType: e.target.value }; setEditTests(u); }}
+                                        style={{ width: '100%', padding: '7px 10px', borderRadius: '6px', border: '1.5px solid #d1d5db', fontSize: '13px', boxSizing: 'border-box' }} />
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '11px', color: '#374151', fontWeight: '600', display: 'block', marginBottom: '3px' }}>Price</label>
+                                    <input value={t.price} onChange={e => { const u = [...editTests]; u[i] = { ...u[i], price: e.target.value }; setEditTests(u); }}
+                                        style={{ width: '100%', padding: '7px 10px', borderRadius: '6px', border: '1.5px solid #d1d5db', fontSize: '13px', boxSizing: 'border-box' }} />
+                                </div>
+                            </div>
+                        ))}
+                        <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
+                            <button onClick={() => { setEditingGroup(null); setEditTests([]); }}
+                                style={{ flex: 1, padding: '10px', background: '#f3f4f6', color: '#374151', border: '1.5px solid #e5e7eb', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', fontSize: '13px' }}>Cancel</button>
+                            <button onClick={saveEditedTests} disabled={savingTests}
+                                style={{ flex: 2, padding: '10px', background: savingTests ? '#9ca3af' : '#667eea', color: 'white', border: 'none', borderRadius: '8px', cursor: savingTests ? 'not-allowed' : 'pointer', fontWeight: '700', fontSize: '13px' }}>
+                                {savingTests ? 'Saving...' : '💾 Save Changes'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Section pills ── */}
+            <div style={{ display: 'flex', gap: '10px', padding: '16px 16px 0', flexWrap: 'wrap' }}>
+                <SectionPill id="pending-payments" label="💳 Pending Payments" count={pendingPayments.length} alertCount={pendingPayments.length} />
+                <SectionPill id="paid-missed"      label="💸 Paid & Missed"    count={paidButMissed.length}    alertCount={paidButMissed.length} />
+                <SectionPill id="rescheduled"      label="🔁 Rescheduled"      count={rescheduledGroups.length} alertCount={0} />
+                <SectionPill id="all-appointments" label="📅 All Appointments" count={appointments.length}      alertCount={0} />
+            </div>
+
+            {/* ══ SECTION 1 — PENDING PAYMENTS ══ */}
+            {activeSection === 'pending-payments' && (
+                <div style={{ padding: '14px 16px' }}>
+                    <SectionBanner icon="⏳" title="Payment Approvals"
+                        subtitle="Patients who transferred to Sterling Bank (0089364407) and tapped 'I Have Paid'."
+                        count={pendingPayments.length}
+                        bg="linear-gradient(135deg,#fef3c7,#fde68a)" border="#fbbf24" countBg="#d97706" />
+                    {pendingPayments.length === 0
+                        ? <EmptyState emoji="✅" title="All payments confirmed" sub="No pending bank transfers to review" />
+                        : pendingPayments.map(g => <GroupCard key={g.key} group={g} />)}
+                </div>
+            )}
+
+            {/* ══ SECTION 2 — PAID & MISSED ══ */}
+            {activeSection === 'paid-missed' && (
+                <div style={{ padding: '14px 16px' }}>
+                    <SectionBanner icon="💸" title="Paid but Missed Appointments"
+                        subtitle="These patients paid but did not show up. Offer a refund or reschedule."
+                        count={paidButMissed.length}
+                        bg="linear-gradient(135deg,#fff7ed,#fed7aa)" border="#f97316" countBg="#ea580c" />
+                    {paidButMissed.length === 0
+                        ? <EmptyState emoji="✅" title="No paid missed appointments" sub="All paying patients attended their appointments" />
+                        : paidButMissed.map(g => <GroupCard key={g.key} group={g} />)}
+                </div>
+            )}
+
+            {/* ══ SECTION 3 — RESCHEDULED ══ */}
+            {activeSection === 'rescheduled' && (
+                <div style={{ padding: '14px 16px' }}>
+                    <SectionBanner icon="🔁" title="Rescheduled Appointments"
+                        subtitle="Previously missed (paid) appointments that have been given a new slot. Mark as Completed once attended."
+                        count={rescheduledGroups.length}
+                        bg="linear-gradient(135deg,#f5f3ff,#ede9fe)" border="#8b5cf6" countBg="#7c3aed" />
+                    {rescheduledGroups.length === 0
+                        ? <EmptyState emoji="✅" title="No rescheduled appointments" sub="Rescheduled appointments will appear here" />
+                        : rescheduledGroups.map(g => <GroupCard key={g.key} group={g} />)}
+                </div>
+            )}
+
+            {/* ══ SECTION 4 — ALL APPOINTMENTS ══ */}
+            {activeSection === 'all-appointments' && (
+                <div style={{ padding: '14px 16px' }}>
+                    {/* Status pills */}
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                        {[
+                            { key: 'all',         label: 'All',         count: counts.all,         color: '#6b7280' },
+                            { key: 'scheduled',   label: 'Scheduled',   count: counts.scheduled,   color: '#065f46' },
+                            { key: 'completed',   label: 'Completed',   count: counts.completed,   color: '#1e40af' },
+                            { key: 'missed',      label: 'Missed',      count: counts.missed,      color: '#9a3412' },
+                            { key: 'rescheduled', label: 'Rescheduled', count: counts.rescheduled, color: '#5b21b6' },
+                            { key: 'cancelled',   label: 'Cancelled',   count: counts.cancelled,   color: '#991b1b' },
+                        ].map(st => (
+                            <button key={st.key} onClick={() => setFilterStatus(st.key)}
+                                style={{
+                                    padding: '5px 12px', borderRadius: '20px',
+                                    border: `2px solid ${filterStatus === st.key ? st.color : '#e5e7eb'}`,
+                                    background: filterStatus === st.key ? st.color : 'white',
+                                    color: filterStatus === st.key ? 'white' : st.color,
+                                    fontWeight: '700', fontSize: '12px', cursor: 'pointer',
+                                }}>
+                                {st.label} ({st.count})
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Filters */}
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Patient Name</label>
+                            <input type="text" placeholder="Search by name..." value={searchName} onChange={e => setSearchName(e.target.value)}
+                                style={{ width: '180px', fontSize: '12px', padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: '6px' }} />
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Payment</label>
+                            <select className="form-input" value={filterPayment} onChange={e => setFilterPayment(e.target.value)} style={{ width: '160px', fontSize: '12px', padding: '5px 8px' }}>
+                                <option value="all">All Payments</option>
+                                <option value="paid">Paid</option>
+                                <option value="pending_confirmation">Pending Confirmation</option>
+                                <option value="pay_on_arrival">Pay on Arrival</option>
+                                <option value="unpaid">Unpaid</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Date</label>
+                            <input type="date" className="form-input" value={filterDate} onChange={e => setFilterDate(e.target.value)} style={{ width: '150px', fontSize: '12px', padding: '5px 8px' }} />
+                        </div>
+                        {(filterStatus !== 'all' || filterPayment !== 'all' || filterDate || searchName) && (
+                            <button onClick={() => { setFilterStatus('all'); setFilterPayment('all'); setFilterDate(''); setSearchName(''); }}
+                                style={{ padding: '6px 12px', background: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                                Clear
+                            </button>
+                        )}
+                    </div>
+
+                    <div style={{ padding: '5px 10px', background: '#f3f4f6', borderRadius: '6px', marginBottom: '12px', fontSize: '12px', color: '#6b7280' }}>
+                        📅 Sorted oldest first · {filteredGroups.length} group(s) · {filteredGroups.reduce((s, g) => s + g.appointments.length, 0)} appointment(s)
+                    </div>
+
+                    {filteredGroups.length === 0
+                        ? <div style={{ textAlign: 'center', padding: '40px', color: '#9ca3af' }}>
+                            <div style={{ fontSize: '40px', marginBottom: '10px' }}>📅</div>
+                            <div style={{ fontSize: '15px', fontWeight: '600', color: '#374151' }}>No appointments found</div>
+                          </div>
+                        : filteredGroups.map(g => <GroupCard key={g.key} group={g} />)}
+                </div>
             )}
         </div>
     );
