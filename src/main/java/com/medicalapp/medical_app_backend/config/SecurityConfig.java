@@ -138,6 +138,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/users/**").authenticated()
                 .requestMatchers("/api/appointments/**").authenticated()
                 .requestMatchers("/api/results/**").authenticated()
+                .requestMatchers("/api/support/admin/**").hasAnyAuthority("ADMIN", "DOCTOR")
                 .requestMatchers("/results/**").authenticated()
 
                 // 🔒 Everything else

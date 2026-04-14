@@ -1,19 +1,21 @@
 const { useState, useEffect, useRef } = React;
 
 const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatient = null }) => {
-  const [conversations, setConversations]   = useState([]);
+  const [conversations, setConversations]         = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
-  const [messages, setMessages]             = useState([]);
-  const [newMessage, setNewMessage]         = useState('');
-  const [loading, setLoading]               = useState(false);
-  const [searchQuery, setSearchQuery]       = useState('');
+  const [messages, setMessages]                   = useState([]);
+  const [newMessage, setNewMessage]               = useState('');
+  const [loading, setLoading]                     = useState(false);
+  const [searchQuery, setSearchQuery]             = useState('');
   const [humanRequestCount, setHumanRequestCount] = useState(0);
-  const [supportStatus, setSupportStatus]   = useState(null);
+  const [supportStatus, setSupportStatus]         = useState(null);
+  const [endingSession, setEndingSession]         = useState(false);
+  const [sessionEndError, setSessionEndError]     = useState(null);
 
-  const messagesEndRef       = useRef(null);
-  const messageInputRef      = useRef(null);
-  const activeConvRef        = useRef(null);
-  const sendingRef           = useRef(false);
+  const messagesEndRef  = useRef(null);
+  const messageInputRef = useRef(null);
+  const activeConvRef   = useRef(null);
+  const sendingRef      = useRef(false);
 
   const getHeaders = () => ({
     'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
@@ -62,11 +64,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     } catch {}
   };
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Admin: load sidebar conversation list
-  // Only show conversations where patient has explicitly requested a human agent
-  // (identified by having a support ticket with "Human Support" subject)
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Admin: load sidebar conversation list ─────────────────────────────────
   const loadConversations = async (silent = false) => {
     if (!isAdmin) return;
     try {
@@ -76,8 +74,8 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
       const data = await res.json();
       if (data.success && data.chats) {
         const mapped = data.chats.map(chat => {
-          // A conversation is "active/needs attention" only when the patient typed "human agent"
-          const isHumanRequest = (chat.subject || '').toLowerCase().includes('human support') ||
+          const isHumanRequest =
+            (chat.subject || '').toLowerCase().includes('human support') ||
             (chat.category || '').toLowerCase().includes('human support');
           return {
             id: chat.ticketId || `user_${chat.userId}`,
@@ -93,7 +91,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             ticketId: chat.ticketId,
           };
         });
-        // Sort: human requests first, then by time
         mapped.sort((a, b) => {
           if (a.isHumanRequest && !b.isHumanRequest) return -1;
           if (!a.isHumanRequest && b.isHumanRequest) return 1;
@@ -127,7 +124,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
       const data = await res.json();
       if (data.success) {
         const formatted = (data.messages || [])
-          .filter(msg => msg.senderType !== 'SYSTEM') // hide system messages
+          .filter(msg => msg.senderType !== 'SYSTEM')
           .map(msg => ({
             id: msg.id,
             senderId: isAgentType(msg.senderType) ? 'admin' : userId,
@@ -138,7 +135,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             status: msg.isRead ? 'read' : 'delivered',
           }));
         setMessages(formatted);
-        // Update patient details if provided
         if (data.user) {
           setActiveConversation(prev => prev ? ({
             ...prev,
@@ -193,31 +189,102 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  // End Session & Clear — admin-initiated
-  // Deletes ALL messages for this patient on the backend
+  // ✅ End Session & Clear
+  //
+  // Backend endpoint:  POST /api/support/admin/end-session/{userId}
+  // Defined in:        SupportController.adminEndSession()
+  // Service method:    SupportService.adminEndChatSession()
+  //
+  // If the endpoint returns 404 it means either:
+  //   (a) The Spring Security config is blocking the route — add it to the
+  //       permit list in SecurityConfig.java alongside the other /api/support/** paths
+  //   (b) The compiled JAR on Railway hasn't been redeployed since you added the method
+  //
+  // This frontend always clears its own state regardless of the backend result
+  // so the admin can continue working even while the backend is being fixed.
   // ─────────────────────────────────────────────────────────────────────────
-  const endSessionAndClear = async (userId) => {
-    if (!confirm(`End this session and clear all chat history for this patient?\n\nThis cannot be undone. The patient's chat will also be cleared.`)) return;
+  const endSessionAndClear = async (userId, patientName) => {
+    if (!window.confirm(
+      `End chat session with ${patientName || 'this patient'}?\n\n` +
+      `All messages will be cleared on both sides. This cannot be undone.`
+    )) return;
+
+    setEndingSession(true);
+    setSessionEndError(null);
+
+    const endpoint = `${CONFIG.ADMIN_API_URL}/api/support/admin/end-session/${userId}`;
+
     try {
-      const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/end-session/${userId}`, {
-        method: 'POST', headers: getHeaders(),
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: getHeaders(),
       });
+
       if (res.ok) {
-        setMessages([]);
-        loadConversations(true);
-        // Remove this conversation from the list
-        setConversations(prev => prev.filter(c => c.userId !== userId));
-        setActiveConversation(null);
-        activeConvRef.current = null;
-        window.showNotificationAlert && window.showNotificationAlert('Session ended. Chat cleared for both sides ✅');
+        // ✅ Backend confirmed deletion
+        const data = await res.json().catch(() => ({ success: true }));
+        console.log('✅ End session success:', data);
+        _clearSessionLocally(userId);
+        window.showNotificationAlert && window.showNotificationAlert('Session ended — chat cleared for both sides ✅');
+
+      } else if (res.status === 404) {
+        // ─────────────────────────────────────────────────────────────────
+        // 404 = endpoint registered in controller but route isn't matched.
+        // Most likely cause: Spring Security is blocking /api/support/admin/**
+        // Fix in SecurityConfig.java:
+        //   .requestMatchers("/api/support/admin/**").hasRole("ADMIN")
+        // OR temporarily:
+        //   .requestMatchers("/api/support/admin/end-session/**").permitAll()
+        //
+        // We still clear the frontend so the admin isn't stuck.
+        // ─────────────────────────────────────────────────────────────────
+        console.warn(
+          '⚠️ POST /api/support/admin/end-session returned 404.\n' +
+          'The endpoint exists in SupportController but is not reachable.\n' +
+          'Check: (1) SecurityConfig permits this route, (2) Railway has the latest build.'
+        );
+        _clearSessionLocally(userId);
+        window.showNotificationAlert && window.showNotificationAlert(
+          'Chat cleared on your view ✅ (Backend returned 404 — redeploy or check SecurityConfig)'
+        );
+
+      } else if (res.status === 401 || res.status === 403) {
+        const msg = `Auth error ${res.status} — admin token may have expired. Please log out and back in.`;
+        setSessionEndError(msg);
+        console.error('❌ End session auth error:', res.status);
+
       } else {
-        alert('Failed to end session. Please try again.');
+        const errData = await res.json().catch(() => ({}));
+        const msg = errData.message || `Server error ${res.status}`;
+        setSessionEndError(msg);
+        console.error('❌ End session server error:', res.status, errData);
+        // Still clear locally so admin isn't blocked
+        _clearSessionLocally(userId);
       }
-    } catch (e) { alert('Error ending session: ' + e.message); }
+
+    } catch (networkErr) {
+      // Network failure (CORS, timeout, etc.) — still clear locally
+      console.error('❌ End session network error:', networkErr.message);
+      _clearSessionLocally(userId);
+      window.showNotificationAlert && window.showNotificationAlert(
+        'Chat cleared locally ✅ (Network error — backend may not have cleared patient side)'
+      );
+    } finally {
+      setEndingSession(false);
+    }
+  };
+
+  // ── Clears the active conversation from admin's local state ──────────────
+  const _clearSessionLocally = (userId) => {
+    setMessages([]);
+    setConversations(prev => prev.filter(c => c.userId !== userId));
+    setActiveConversation(null);
+    activeConvRef.current = null;
+    setSessionEndError(null);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Send message — fire-and-forget, no spinner hang
+  // Send message — optimistic UI, no spinner hang
   // ─────────────────────────────────────────────────────────────────────────
   const sendMessage = async () => {
     if (!newMessage.trim() || sendingRef.current) return;
@@ -225,12 +292,13 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
     setNewMessage('');
     sendingRef.current = true;
 
-    // Optimistic UI
     const tempId = `temp_${Date.now()}`;
     setMessages(prev => [...prev, {
       id: tempId,
       senderId: currentUser?.id,
-      senderName: isAdmin ? (currentUser?.name || 'Medical Support') : `${currentUser?.firstName || ''} ${currentUser?.lastName || ''}`.trim(),
+      senderName: isAdmin
+        ? (currentUser?.name || 'Medical Support')
+        : `${currentUser?.firstName || ''} ${currentUser?.lastName || ''}`.trim(),
       senderType: isAdmin ? 'SUPPORT_AGENT' : 'USER',
       message: text,
       timestamp: new Date(),
@@ -244,7 +312,12 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         if (!conv?.userId) throw new Error('No patient selected');
         res = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/reply`, {
           method: 'POST', headers: getHeaders(),
-          body: JSON.stringify({ userId: conv.userId, message: text, ticketId: conv.ticketId || null, senderType: 'SUPPORT_AGENT' }),
+          body: JSON.stringify({
+            userId: conv.userId,
+            message: text,
+            ticketId: conv.ticketId || null,
+            senderType: 'SUPPORT_AGENT',
+          }),
         });
       } else {
         res = await fetch(`${CONFIG.API_BASE_URL}/api/support/chat/message`, {
@@ -257,24 +330,25 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
       const data = await res.json();
 
       if (data.success) {
-        // Confirm temp
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'delivered', id: data.messageId || m.id } : m));
-        // Bot response (patient only)
+        setMessages(prev => prev.map(m =>
+          m.id === tempId ? { ...m, status: 'delivered', id: data.messageId || m.id } : m
+        ));
         if (!isAdmin && data.botResponse) {
           setTimeout(() => {
             setMessages(prev => [...prev, {
-              id: `bot_${Date.now()}`, senderId: 'bot', senderName: 'Medical Support Bot',
-              senderType: 'BOT', message: data.botResponse, timestamp: new Date(),
+              id: `bot_${Date.now()}`, senderId: 'bot',
+              senderName: 'Medical Support Bot', senderType: 'BOT',
+              message: data.botResponse, timestamp: new Date(),
             }]);
           }, 400);
         }
-        // Re-fetch after 400ms to sync
         const conv = activeConvRef.current;
         setTimeout(() => {
           if (isAdmin && conv?.userId) loadMessagesForUser(conv.userId, true);
           else if (!isAdmin) loadPatientHistory(true);
         }, 400);
       } else throw new Error(data.message || 'Send failed');
+
     } catch (e) {
       console.error('sendMessage error:', e);
       setMessages(prev => prev.filter(m => m.id !== tempId));
@@ -337,7 +411,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>
               {isAdmin ? '💬 Patient Support Chat' : '🏥 Medical Support'}
             </h2>
-            {/* Badge only for actual human agent requests */}
             {isAdmin && humanRequestCount > 0 && (
               <span style={{
                 backgroundColor: '#ef4444', color: 'white', borderRadius: '12px',
@@ -348,7 +421,9 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             )}
             {!isAdmin && supportStatus && (
               <span style={{ fontSize: '12px', color: supportStatus.isOnline ? '#10b981' : '#f59e0b' }}>
-                ● {supportStatus.isOnline ? `Online · ${supportStatus.estimatedResponseTime || 'Fast replies'}` : 'Offline'}
+                ● {supportStatus.isOnline
+                  ? `Online · ${supportStatus.estimatedResponseTime || 'Fast replies'}`
+                  : 'Offline'}
               </span>
             )}
           </div>
@@ -368,19 +443,27 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
               display: 'flex', flexDirection: 'column', backgroundColor: '#f9fafb',
             }}>
               <div style={{ padding: '12px' }}>
-                <input type="text" placeholder="Search patients..."
-                  value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                  style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }}
+                <input
+                  type="text"
+                  placeholder="Search patients..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  style={{
+                    width: '100%', padding: '8px 12px', border: '1px solid #d1d5db',
+                    borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box',
+                  }}
                 />
               </div>
 
               <div style={{ flex: 1, overflowY: 'auto' }}>
                 {loading && conversations.length === 0 ? (
-                  <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '13px' }}>Loading conversations...</div>
+                  <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '13px' }}>
+                    Loading conversations...
+                  </div>
                 ) : filteredConversations.length === 0 ? (
                   <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '13px' }}>
                     No conversations yet.<br />
-                    <small>Patients appear here when they request a human agent.</small>
+                    <small>Patients appear here when they message support.</small>
                   </div>
                 ) : filteredConversations.map(conv => (
                   <div
@@ -388,16 +471,24 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     onClick={() => {
                       setActiveConversation(conv);
                       activeConvRef.current = conv;
+                      setSessionEndError(null);
                       loadMessagesForUser(conv.userId, false);
                     }}
                     style={{
                       padding: '11px 14px', cursor: 'pointer',
                       borderBottom: '1px solid #e5e7eb',
-                      backgroundColor: activeConversation?.id === conv.id ? '#dbeafe'
+                      backgroundColor: activeConversation?.id === conv.id
+                        ? '#dbeafe'
                         : conv.isHumanRequest ? '#fef9c3' : 'transparent',
                     }}
-                    onMouseEnter={e => { if (activeConversation?.id !== conv.id) e.currentTarget.style.backgroundColor = '#f3f4f6'; }}
-                    onMouseLeave={e => { if (activeConversation?.id !== conv.id) e.currentTarget.style.backgroundColor = conv.isHumanRequest ? '#fef9c3' : 'transparent'; }}
+                    onMouseEnter={e => {
+                      if (activeConversation?.id !== conv.id)
+                        e.currentTarget.style.backgroundColor = '#f3f4f6';
+                    }}
+                    onMouseLeave={e => {
+                      if (activeConversation?.id !== conv.id)
+                        e.currentTarget.style.backgroundColor = conv.isHumanRequest ? '#fef9c3' : 'transparent';
+                    }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -412,8 +503,8 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                         {conv.isHumanRequest && (
                           <div style={{
                             display: 'inline-block', backgroundColor: '#fef3c7', color: '#92400e',
-                            fontSize: '9px', fontWeight: '800', padding: '1px 6px',
-                            borderRadius: '4px', marginBottom: '3px', border: '1px solid #fbbf24',
+                            fontSize: '9px', fontWeight: '800', padding: '1px 6px', borderRadius: '4px',
+                            marginBottom: '3px', border: '1px solid #fbbf24',
                           }}>
                             🙋 LIVE AGENT REQUESTED
                           </div>
@@ -426,7 +517,8 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                         </div>
                       </div>
                       <div style={{
-                        width: '8px', height: '8px', borderRadius: '50%', marginLeft: '8px', marginTop: '4px', flexShrink: 0,
+                        width: '8px', height: '8px', borderRadius: '50%',
+                        marginLeft: '8px', marginTop: '4px', flexShrink: 0,
                         backgroundColor: conv.isHumanRequest ? '#ef4444' : '#10b981',
                       }} />
                     </div>
@@ -456,43 +548,83 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                         : 'Qualitest Medical · info@qualitestmedical.com'}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                    {isAdmin && (
-                      <>
-                        <button
-                          onClick={() => { loadMessagesForUser(activeConversation.userId, false); }}
-                          style={{ padding: '5px 10px', fontSize: '11px', background: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: '6px', cursor: 'pointer' }}
-                          title="Refresh messages"
-                        >
-                          🔄 Refresh
-                        </button>
-                        <button
-                          onClick={() => endSessionAndClear(activeConversation.userId)}
-                          style={{ padding: '5px 12px', fontSize: '11px', fontWeight: '600', backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
-                          title="End session and clear all messages"
-                        >
-                          🗑 End & Clear
-                        </button>
-                      </>
-                    )}
-                  </div>
+
+                  {isAdmin && (
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <button
+                        onClick={() => loadMessagesForUser(activeConversation.userId, false)}
+                        style={{
+                          padding: '5px 10px', fontSize: '11px', background: '#f3f4f6',
+                          border: '1px solid #d1d5db', borderRadius: '6px', cursor: 'pointer',
+                        }}
+                        title="Refresh messages"
+                      >
+                        🔄 Refresh
+                      </button>
+
+                      {/* ✅ End & Clear button — calls POST /api/support/admin/end-session/{userId} */}
+                      <button
+                        onClick={() => endSessionAndClear(activeConversation.userId, activeConversation.patientName)}
+                        disabled={endingSession}
+                        style={{
+                          padding: '5px 12px', fontSize: '11px', fontWeight: '600',
+                          backgroundColor: endingSession ? '#9ca3af' : '#ef4444',
+                          color: 'white', border: 'none', borderRadius: '6px',
+                          cursor: endingSession ? 'not-allowed' : 'pointer',
+                          display: 'flex', alignItems: 'center', gap: '5px',
+                          opacity: endingSession ? 0.7 : 1,
+                          transition: 'background-color 0.15s',
+                        }}
+                        title="End session and clear all messages for this patient"
+                      >
+                        {endingSession ? (
+                          <>
+                            <span style={{ display: 'inline-block', width: '10px', height: '10px', border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+                            Ending...
+                          </>
+                        ) : (
+                          '🗑 End & Clear'
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
+
+                {/* ✅ Session end error banner — shown inline under the sub-header */}
+                {sessionEndError && (
+                  <div style={{
+                    padding: '8px 16px', background: '#fef2f2', borderBottom: '1px solid #fecaca',
+                    fontSize: '12px', color: '#dc2626', display: 'flex', alignItems: 'center',
+                    justifyContent: 'space-between', flexShrink: 0,
+                  }}>
+                    <span>⚠️ {sessionEndError}</span>
+                    <button onClick={() => setSessionEndError(null)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', fontSize: '14px', padding: '0 4px' }}>
+                      ✕
+                    </button>
+                  </div>
+                )}
 
                 {/* Messages */}
                 <div style={{ flex: 1, overflowY: 'auto', padding: '16px', backgroundColor: '#f9fafb' }}>
                   {messages.length === 0 ? (
                     <div style={{ textAlign: 'center', color: '#9ca3af', marginTop: '40px', fontSize: '14px' }}>
-                      {isAdmin ? 'No messages from this patient yet.' : 'No messages yet. Start the conversation!'}
+                      {loading
+                        ? 'Loading messages...'
+                        : isAdmin
+                          ? 'No messages from this patient yet.'
+                          : 'No messages yet. Start the conversation!'}
                     </div>
                   ) : messages.map(msg => {
-                    const mine = isMyMessage(msg);
+                    const mine    = isMyMessage(msg);
                     const bgColor = getBubbleBg(msg);
+                    const isBot   = (msg.senderType || '').toLowerCase() === 'bot';
                     return (
                       <div key={msg.id} style={{ display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start', marginBottom: '10px' }}>
                         <div style={{
                           maxWidth: '75%', padding: '10px 14px', borderRadius: '16px',
                           backgroundColor: bgColor,
-                          color: (mine || (msg.senderType || '').toLowerCase() === 'bot') ? 'white' : '#1f2937',
+                          color: (mine || isBot) ? 'white' : '#1f2937',
                           boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
                           borderBottomRightRadius: mine ? '4px' : '16px',
                           borderBottomLeftRadius:  mine ? '16px' : '4px',
@@ -505,9 +637,16 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                           <div style={{ fontSize: '13px', lineHeight: '1.45', whiteSpace: 'pre-wrap' }}>
                             {msg.message}
                           </div>
-                          <div style={{ fontSize: '10px', opacity: 0.6, marginTop: '4px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '3px' }}>
+                          <div style={{
+                            fontSize: '10px', opacity: 0.6, marginTop: '4px',
+                            display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '3px',
+                          }}>
                             {formatTime(msg.timestamp)}
-                            {mine && <span>{msg.status === 'sending' ? '🕐' : msg.status === 'read' ? '✓✓' : '✓'}</span>}
+                            {mine && (
+                              <span>
+                                {msg.status === 'sending' ? '🕐' : msg.status === 'read' ? '✓✓' : '✓'}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -529,8 +668,8 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                       style={{
                         flex: 1, padding: '10px 14px', border: '1px solid #d1d5db',
                         borderRadius: '20px', resize: 'none', fontSize: '13px',
-                        minHeight: '42px', maxHeight: '110px', fontFamily: 'inherit', outline: 'none',
-                        boxSizing: 'border-box',
+                        minHeight: '42px', maxHeight: '110px', fontFamily: 'inherit',
+                        outline: 'none', boxSizing: 'border-box',
                       }}
                     />
                     <button
@@ -550,7 +689,7 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                   </div>
                   {isAdmin && (
                     <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '4px', paddingLeft: '4px' }}>
-                      Enter to send · Shift+Enter for new line · Use "End &amp; Clear" when done
+                      Enter to send · Shift+Enter for new line · Use "End &amp; Clear" when session is done
                     </div>
                   )}
                 </div>
@@ -560,10 +699,12 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
               <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#9ca3af' }}>
                 <div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.3 }}>💬</div>
                 {isAdmin ? (
-                  <div style={{ textAlign: 'center' }}>
-                    <p style={{ fontWeight: '600', color: '#374151', marginBottom: '4px' }}>Select a conversation</p>
-                    <small>Patients who typed "human agent" appear in the sidebar.<br />
-                    Use "End &amp; Clear" after each session to wipe the history.</small>
+                  <div style={{ textAlign: 'center', maxWidth: '280px' }}>
+                    <p style={{ fontWeight: '600', color: '#374151', marginBottom: '6px' }}>Select a conversation</p>
+                    <small style={{ color: '#9ca3af', lineHeight: '1.5' }}>
+                      Patients who send messages appear in the sidebar.<br />
+                      Use "End &amp; Clear" after each session to wipe history.
+                    </small>
                   </div>
                 ) : (
                   <div style={{ textAlign: 'center' }}>
@@ -576,13 +717,21 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
           </div>
         </div>
       </div>
+
+      {/* Spinner keyframe for end-session loading state */}
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 };
 
 // ── Support Chat Button ───────────────────────────────────────────────────────
 const SupportChatButton = ({ isAdmin, currentUser, patients = [] }) => {
-  const [showChat, setShowChat] = useState(false);
+  const [showChat, setShowChat]           = useState(false);
   const [selectedPatient, setSelectedPatient] = useState(null);
 
   return (
@@ -593,8 +742,11 @@ const SupportChatButton = ({ isAdmin, currentUser, patients = [] }) => {
           Support Center
         </button>
       ) : (
-        <button className="btn btn-primary" onClick={() => setShowChat(true)}
-          style={{ position: 'fixed', bottom: '20px', right: '20px', borderRadius: '50px', padding: '12px 20px' }}>
+        <button
+          className="btn btn-primary"
+          onClick={() => setShowChat(true)}
+          style={{ position: 'fixed', bottom: '20px', right: '20px', borderRadius: '50px', padding: '12px 20px' }}
+        >
           <i className="fas fa-life-ring" style={{ marginRight: '8px' }}></i>
           Get Help
         </button>
