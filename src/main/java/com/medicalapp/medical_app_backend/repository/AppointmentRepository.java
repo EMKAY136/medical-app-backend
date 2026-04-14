@@ -54,7 +54,7 @@ public interface AppointmentRepository extends JpaRepository<Appointment, Long> 
     Page<Appointment> findByScheduledDate(@Param("date") LocalDate date, Pageable pageable);
 
     Page<Appointment> findByStatus(Appointment.Status status, Pageable pageable);
-
+    
     @Query("SELECT a FROM Appointment a WHERE DATE(a.appointmentDate) = :date AND a.status = :status")
     Page<Appointment> findByScheduledDateAndStatus(
         @Param("date") LocalDate date,
@@ -107,4 +107,7 @@ public interface AppointmentRepository extends JpaRepository<Appointment, Long> 
 
     /** Appointments for a patient filtered by payment status. */
     List<Appointment> findByPatientAndPaymentStatus(User patient, Appointment.PaymentStatus paymentStatus);
+
+    
+    List<Appointment> findByRescheduleStatus(Appointment.RescheduleStatus rescheduleStatus);
 }
