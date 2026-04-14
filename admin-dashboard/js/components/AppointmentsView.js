@@ -640,23 +640,8 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 <SectionPill id="all-appointments"     label="📋 All Appointments"      count={appointments.length} />
             </div>
 
-            {/* ── Status filter tabs (visible on ALL sections) ── */}
+            {/* ── Shared search + filters (visible on ALL sections) ── */}
             <div style={{ padding: '14px 16px 0' }}>
-                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
-                    {[
-                        { key: 'all',         label: 'All',         count: counts.all,         color: '#6b7280' },
-                        { key: 'scheduled',   label: 'Scheduled',   count: counts.scheduled,   color: '#065f46' },
-                        { key: 'completed',   label: 'Completed',   count: counts.completed,   color: '#1e40af' },
-                        { key: 'missed',      label: 'Missed',      count: counts.missed,      color: '#9a3412' },
-                        { key: 'rescheduled', label: 'Rescheduled', count: counts.rescheduled, color: '#5b21b6' },
-                        { key: 'cancelled',   label: 'Cancelled',   count: counts.cancelled,   color: '#991b1b' },
-                    ].map(st => (
-                        <button key={st.key} onClick={() => setFilterStatus(st.key)} style={{ padding: '5px 12px', borderRadius: '20px', border: `2px solid ${filterStatus === st.key ? st.color : '#e5e7eb'}`, background: filterStatus === st.key ? st.color : 'white', color: filterStatus === st.key ? 'white' : st.color, fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
-                            {st.label} ({st.count})
-                        </button>
-                    ))}
-                </div>
-
                 {/* ── Shared search + filters ── */}
                 <div style={{ display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
                     <div>
@@ -923,9 +908,32 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 </div>
             )}
 
-            {/* ══ SECTION — ALL APPOINTMENTS (tabs removed, uses shared filters above) ══ */}
+            {/* ══ SECTION — ALL APPOINTMENTS ══ */}
             {activeSection === 'all-appointments' && (
                 <div style={{ padding: '14px 16px' }}>
+                    {/* ── Status filter tabs (same size as section pills) ── */}
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '14px' }}>
+                        {[
+                            { key: 'all',         label: 'All',         count: counts.all,         color: '#6b7280' },
+                            { key: 'scheduled',   label: 'Scheduled',   count: counts.scheduled,   color: '#065f46' },
+                            { key: 'completed',   label: 'Completed',   count: counts.completed,   color: '#1e40af' },
+                            { key: 'rescheduled', label: 'Rescheduled', count: counts.rescheduled, color: '#5b21b6' },
+                            { key: 'cancelled',   label: 'Cancelled',   count: counts.cancelled,   color: '#991b1b' },
+                        ].map(st => (
+                            <button key={st.key} onClick={() => setFilterStatus(st.key)} style={{
+                                padding: '8px 16px', borderRadius: '8px',
+                                border: `2px solid ${filterStatus === st.key ? st.color : '#e5e7eb'}`,
+                                background: filterStatus === st.key ? st.color : 'white',
+                                color: filterStatus === st.key ? 'white' : st.color,
+                                fontWeight: '700', fontSize: '13px', cursor: 'pointer',
+                                display: 'flex', alignItems: 'center', gap: '6px',
+                            }}>
+                                {st.label}
+                                <span style={{ padding: '1px 7px', borderRadius: '12px', background: filterStatus === st.key ? 'rgba(255,255,255,0.25)' : '#f3f4f6', color: filterStatus === st.key ? 'white' : '#6b7280', fontSize: '11px', fontWeight: '700' }}>({st.count})</span>
+                            </button>
+                        ))}
+                    </div>
+
                     <div style={{ padding: '5px 10px', background: '#f3f4f6', borderRadius: '6px', marginBottom: '12px', fontSize: '12px', color: '#6b7280' }}>
                         📅 Sorted oldest first · {filteredGroups.length} group(s) · {filteredGroups.reduce((s, g) => s + g.appointments.length, 0)} appointment(s)
                     </div>
