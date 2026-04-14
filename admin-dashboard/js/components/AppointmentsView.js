@@ -6,7 +6,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     const [filterDate, setFilterDate]       = useState('');
     const [searchName, setSearchName]       = useState('');
     const [actionLoading, setActionLoading] = useState(null);
-    const [activeSection, setActiveSection] = useState('pending-payments');
+    const [activeSection, setActiveSection] = useState('all-appointments');
     const [missedSubTab, setMissedSubTab]   = useState('all-missed');
 
     const [editingGroup, setEditingGroup]   = useState(null);
@@ -628,22 +628,42 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 </div>
             )}
 
-            {/* ── Section pills (NO red badges) ── */}
-            <div style={{ display: 'flex', gap: '10px', padding: '16px 16px 0', flexWrap: 'wrap' }}>
-                <SectionPill id="pending-payments"     label="💳 Pending Payments"     count={pendingPayments.length} />
-                <SectionPill id="all-missed"           label="⚠️ All Missed"            count={allMissed.length} />
-                <SectionPill id="refund-requests"      label="💰 Refund Requests"       count={pendingRefunds.length} />
-                <SectionPill id="approved-refunds"     label="✅ Approved Refunds"      count={approvedRefunds.length} />
-                <SectionPill id="already-refunded"     label="💸 Already Refunded"      count={alreadyRefunded.length} />
-                <SectionPill id="reschedule-requests"  label="📅 Reschedule Requests"   count={rescheduleRequests.length} />
-                <SectionPill id="rescheduled"          label="🔁 Rescheduled"           count={rescheduledGroups.length} />
-                <SectionPill id="all-appointments"     label="📋 All Appointments"      count={appointments.length} />
-            </div>
 
-            {/* ── Shared search + filters (visible on ALL sections) ── */}
-            <div style={{ padding: '14px 16px 0' }}>
-                {/* ── Shared search + filters ── */}
-                <div style={{ display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+
+
+
+
+            {/* ══ UNIFIED ALL APPOINTMENTS VIEW ══ */}
+            <div style={{ padding: '14px 16px' }}>
+                {/* ── Section pills ── */}
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' }}>
+                    <SectionPill id="all-appointments"     label="📋 All Appointments"      count={appointments.length} />
+                    <SectionPill id="pending-payments"     label="💳 Pending Payments"     count={pendingPayments.length} />
+                    <SectionPill id="all-missed"           label="⚠️ All Missed"            count={allMissed.length} />
+                    <SectionPill id="refund-requests"      label="💰 Refund Requests"       count={pendingRefunds.length} />
+                    <SectionPill id="approved-refunds"     label="✅ Approved Refunds"      count={approvedRefunds.length} />
+                    <SectionPill id="already-refunded"     label="💸 Already Refunded"      count={alreadyRefunded.length} />
+                    <SectionPill id="reschedule-requests"  label="📅 Reschedule Requests"   count={rescheduleRequests.length} />
+                    <SectionPill id="rescheduled"          label="🔁 Rescheduled"           count={rescheduledGroups.length} />
+                </div>
+
+                {/* ── Status filter tabs (no Missed tab) ── */}
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                    {[
+                        { key: 'all',         label: 'All',         count: counts.all,         color: '#6b7280' },
+                        { key: 'scheduled',   label: 'Scheduled',   count: counts.scheduled,   color: '#065f46' },
+                        { key: 'completed',   label: 'Completed',   count: counts.completed,   color: '#1e40af' },
+                        { key: 'rescheduled', label: 'Rescheduled', count: counts.rescheduled, color: '#5b21b6' },
+                        { key: 'cancelled',   label: 'Cancelled',   count: counts.cancelled,   color: '#991b1b' },
+                    ].map(st => (
+                        <button key={st.key} onClick={() => setFilterStatus(st.key)} style={{ padding: '5px 12px', borderRadius: '20px', border: `2px solid ${filterStatus === st.key ? st.color : '#e5e7eb'}`, background: filterStatus === st.key ? st.color : 'white', color: filterStatus === st.key ? 'white' : st.color, fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
+                            {st.label} ({st.count})
+                        </button>
+                    ))}
+                </div>
+
+                {/* ── Search + filters ── */}
+                <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
                     <div>
                         <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Patient Name</label>
                         <input type="text" placeholder="Search by name..." value={searchName} onChange={e => setSearchName(e.target.value)}
@@ -669,6 +689,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                     )}
                 </div>
             </div>
+
 
             {/* ══ SECTION 1 — PENDING PAYMENTS ══ */}
             {activeSection === 'pending-payments' && (
@@ -908,32 +929,12 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 </div>
             )}
 
-            {/* ══ SECTION — ALL APPOINTMENTS ══ */}
-            {activeSection === 'all-appointments' && (
-                <div style={{ padding: '14px 16px' }}>
-                    {/* ── Status filter tabs (same size as section pills) ── */}
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '14px' }}>
-                        {[
-                            { key: 'all',         label: 'All',         count: counts.all,         color: '#6b7280' },
-                            { key: 'scheduled',   label: 'Scheduled',   count: counts.scheduled,   color: '#065f46' },
-                            { key: 'completed',   label: 'Completed',   count: counts.completed,   color: '#1e40af' },
-                            { key: 'rescheduled', label: 'Rescheduled', count: counts.rescheduled, color: '#5b21b6' },
-                            { key: 'cancelled',   label: 'Cancelled',   count: counts.cancelled,   color: '#991b1b' },
-                        ].map(st => (
-                            <button key={st.key} onClick={() => setFilterStatus(st.key)} style={{
-                                padding: '8px 16px', borderRadius: '8px',
-                                border: `2px solid ${filterStatus === st.key ? st.color : '#e5e7eb'}`,
-                                background: filterStatus === st.key ? st.color : 'white',
-                                color: filterStatus === st.key ? 'white' : st.color,
-                                fontWeight: '700', fontSize: '13px', cursor: 'pointer',
-                                display: 'flex', alignItems: 'center', gap: '6px',
-                            }}>
-                                {st.label}
-                                <span style={{ padding: '1px 7px', borderRadius: '12px', background: filterStatus === st.key ? 'rgba(255,255,255,0.25)' : '#f3f4f6', color: filterStatus === st.key ? 'white' : '#6b7280', fontSize: '11px', fontWeight: '700' }}>({st.count})</span>
-                            </button>
-                        ))}
-                    </div>
+            {/* ══ SECTION — ALL APPOINTMENTS (tabs removed, uses shared filters above) ══ */}
 
+            {/* ── Section content based on activeSection ── */}
+
+            {activeSection === 'all-appointments' && (
+                <div style={{ padding: '0 16px 14px' }}>
                     <div style={{ padding: '5px 10px', background: '#f3f4f6', borderRadius: '6px', marginBottom: '12px', fontSize: '12px', color: '#6b7280' }}>
                         📅 Sorted oldest first · {filteredGroups.length} group(s) · {filteredGroups.reduce((s, g) => s + g.appointments.length, 0)} appointment(s)
                     </div>
@@ -943,6 +944,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                         : filteredGroups.map(g => <GroupCard key={g.key} group={g} />)}
                 </div>
             )}
+
         </div>
     );
 };
