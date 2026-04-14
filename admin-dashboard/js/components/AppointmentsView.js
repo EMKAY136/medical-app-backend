@@ -8,6 +8,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     const [actionLoading, setActionLoading] = useState(null);
     const [activeSection, setActiveSection] = useState('pending-payments');
     const [missedSubTab, setMissedSubTab]   = useState('all-missed'); // 'all-missed' | 'paid-missed'
+    const [viewedSections, setViewedSections] = useState(new Set());
 
     const [editingGroup, setEditingGroup]   = useState(null);
     const [editTests, setEditTests]         = useState([]);
@@ -377,7 +378,9 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
 
     // ── Section pill ──────────────────────────────────────────────────────────
     const SectionPill = ({ id, label, count, alertCount }) => (
-        <button onClick={() => setActiveSection(id)} style={{
+        <button onClick={() => {
+    setActiveSection(id);
+    setViewedSections(prev => new Set(prev).add(id));}} style={{
             padding: '8px 16px', borderRadius: '8px',
             border: `2px solid ${activeSection === id ? '#667eea' : '#e5e7eb'}`,
             background: activeSection === id ? '#667eea' : 'white',
@@ -389,7 +392,8 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
             {count !== undefined && (
                 <span style={{ padding: '1px 7px', borderRadius: '12px', background: activeSection === id ? 'rgba(255,255,255,0.25)' : '#f3f4f6', color: activeSection === id ? 'white' : '#6b7280', fontSize: '11px', fontWeight: '700' }}>{count}</span>
             )}
-            {alertCount > 0 && (
+            {alertCount > 0 && !viewedSections.has(id) && (
+
                 <span style={{ position: 'absolute', top: '-6px', right: '-6px', width: '16px', height: '16px', borderRadius: '50%', background: '#ef4444', color: 'white', fontSize: '9px', fontWeight: '900', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{alertCount}</span>
             )}
         </button>

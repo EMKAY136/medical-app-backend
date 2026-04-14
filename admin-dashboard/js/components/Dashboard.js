@@ -728,3 +728,4 @@ const MedicalAdminDashboard = () => {
         </div>
     );
 };
+window.MedicalAdminDashboard = MedicalAdminDashboard;
