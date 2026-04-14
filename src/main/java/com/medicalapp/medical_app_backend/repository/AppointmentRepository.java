@@ -113,4 +113,7 @@ public interface AppointmentRepository extends JpaRepository<Appointment, Long> 
 
     // Reschedule queries
     List<Appointment> findByRescheduleStatus(Appointment.RescheduleStatus rescheduleStatus);
+
+    List<Appointment> findByRefundStatusIn(List<Appointment.RefundStatus> statuses);
+
 }

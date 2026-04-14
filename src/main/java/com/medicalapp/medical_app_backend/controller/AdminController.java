@@ -282,36 +282,45 @@ public class AdminController {
     // ── Refund requests ───────────────────────────────────────────────────────
 
     @GetMapping("/refund-requests")
-    public ResponseEntity<?> getRefundRequests(@AuthenticationPrincipal UserDetails userDetails) {
-        try {
-            if (userDetails == null) return unauth();
-            List<Appointment> list = appointmentRepository.findByRefundStatus(Appointment.RefundStatus.REQUESTED);
-            List<Map<String, Object>> result = new ArrayList<>();
-            for (Appointment apt : list) {
-                Map<String, Object> row = new HashMap<>();
-                row.put("id",            apt.getId());
-                row.put("appointmentId", apt.getId());
-                row.put("patientId",     apt.getPatient().getId());
-                row.put("patientName",   apt.getPatient().getFirstName() + " " + apt.getPatient().getLastName());
-                row.put("testType",      apt.getTestType() != null ? apt.getTestType() : apt.getReason());
-                row.put("testName",      apt.getTestType() != null ? apt.getTestType() : apt.getReason());
-                row.put("amount",        apt.getPrice());
-                row.put("price",         apt.getPrice());
-                row.put("reason",        apt.getRefundReason());
-                row.put("status",        "PENDING");
-                row.put("refundStatus",  apt.getRefundStatus().name());
-                row.put("requestedAt",   apt.getRefundRequestedAt());
-                row.put("paymentStatus", apt.getPaymentStatus() != null ? apt.getPaymentStatus().name() : "PAID");
-                row.put("appointmentDate", apt.getAppointmentDate());
-                row.put("createdAt",     apt.getCreatedAt());
-                result.add(row);
-            }
-            return ResponseEntity.ok(Map.of("success", true, "refundRequests", result, "count", result.size()));
-        } catch (Exception e) {
-            logger.error("Error fetching refund requests: {}", e.getMessage());
-            return error500(e.getMessage());
+public ResponseEntity<?> getRefundRequests(@AuthenticationPrincipal UserDetails userDetails) {
+    try {
+        if (userDetails == null) return unauth();
+        // Fetch ALL refund statuses, not just REQUESTED
+        List<Appointment> list = appointmentRepository.findByRefundStatusIn(
+            List.of(Appointment.RefundStatus.REQUESTED, 
+                    Appointment.RefundStatus.APPROVED, 
+                    Appointment.RefundStatus.REFUNDED)
+        );
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Appointment apt : list) {
+            Map<String, Object> row = new HashMap<>();
+            row.put("id",            apt.getId());
+            row.put("appointmentId", apt.getId());
+            row.put("patientId",     apt.getPatient().getId());
+            row.put("patientName",   apt.getPatient().getFirstName() + " " + apt.getPatient().getLastName());
+            row.put("testType",      apt.getTestType() != null ? apt.getTestType() : apt.getReason());
+            row.put("testName",      apt.getTestType() != null ? apt.getTestType() : apt.getReason());
+            row.put("amount",        apt.getPrice());
+            row.put("price",         apt.getPrice());
+            row.put("reason",        apt.getRefundReason());
+            // Use actual refund status instead of hardcoding "PENDING"
+            row.put("status",        apt.getRefundStatus().name());
+            row.put("refundStatus",  apt.getRefundStatus().name());
+            row.put("requestedAt",   apt.getRefundRequestedAt());
+            row.put("approvedAt",    apt.getRefundApprovedAt());
+            row.put("approvedBy",    apt.getRefundApprovedBy());
+            row.put("paymentStatus", apt.getPaymentStatus() != null ? apt.getPaymentStatus().name() : "PAID");
+            row.put("appointmentDate", apt.getAppointmentDate());
+            row.put("createdAt",     apt.getCreatedAt());
+            result.add(row);
         }
+        return ResponseEntity.ok(Map.of("success", true, "refundRequests", result, "count", result.size()));
+    } catch (Exception e) {
+        logger.error("Error fetching refund requests: {}", e.getMessage());
+        return error500(e.getMessage());
     }
+}
+
 
     @PostMapping("/refund-requests/{id}/approve")
     public ResponseEntity<?> approveRefundRequest(@PathVariable Long id, @AuthenticationPrincipal UserDetails userDetails) {
