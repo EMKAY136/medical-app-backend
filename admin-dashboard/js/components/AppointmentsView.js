@@ -7,8 +7,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     const [searchName, setSearchName]       = useState('');
     const [actionLoading, setActionLoading] = useState(null);
     const [activeSection, setActiveSection] = useState('pending-payments');
-    const [missedSubTab, setMissedSubTab]   = useState('all-missed'); // 'all-missed' | 'paid-missed'
-    const [viewedSections, setViewedSections] = useState(new Set());
+    const [missedSubTab, setMissedSubTab]   = useState('all-missed');
 
     const [editingGroup, setEditingGroup]   = useState(null);
     const [editTests, setEditTests]         = useState([]);
@@ -19,16 +18,13 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     const [rescheduleTime, setRescheduleTime]   = useState('');
     const [rescheduling, setRescheduling]       = useState(false);
 
-    // ── Refund requests — fetched separately from backend ────────────────────
     const [refundRequests, setRefundRequests]   = useState([]);
     const [refundLoading, setRefundLoading]     = useState(false);
     const [processingRefund, setProcessingRefund] = useState(null);
 
-    // ── Reschedule requests — patient-initiated reschedule asks ─────────────
     const [rescheduleRequests, setRescheduleRequests] = useState([]);
     const [rescheduleReqLoading, setRescheduleReqLoading] = useState(false);
 
-    // ── Load refund + reschedule requests on mount and on refresh ────────────
     useEffect(() => {
         loadRefundRequests();
         loadRescheduleRequests();
@@ -38,17 +34,14 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         setRefundLoading(true);
         try {
             const token = localStorage.getItem('authToken');
-            // Try the dedicated refund endpoint first
             const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/refund-requests`, {
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             });
             if (res.ok) {
                 const data = await res.json();
-                // Support both { refundRequests: [...] } and { data: [...] } and plain arrays
                 const list = data.refundRequests || data.data || data.requests || (Array.isArray(data) ? data : []);
                 setRefundRequests(list);
             } else {
-                // Fallback: derive from appointments array if endpoint doesn't exist
                 deriveRefundRequestsFromAppointments();
             }
         } catch {
@@ -59,24 +52,23 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     };
 
     const deriveRefundRequestsFromAppointments = () => {
-    const refunds = appointments.filter(a =>
-        a.refundRequested === true ||
-        ['REQUESTED', 'APPROVED', 'REFUNDED'].includes((a.refundStatus || '').toUpperCase()) ||
-        (a.paymentStatus || '').toUpperCase() === 'REFUND_REQUESTED'
-    );
-    setRefundRequests(refunds.map(a => ({
-        id: a.id,
-        appointmentId: a.id,
-        patientName: a.patientName,
-        patientId: a.patientId,
-        amount: a.price,
-        testType: a.testType || a.reason,
-        requestedAt: a.refundRequestedAt || a.updatedAt || a.createdAt,
-        status: (a.refundStatus || 'PENDING').toUpperCase(),  // Use actual refundStatus
-        reason: a.refundReason || 'Patient requested refund',
-    })));
-};
-
+        const refunds = appointments.filter(a =>
+            a.refundRequested === true ||
+            ['REQUESTED', 'APPROVED', 'REFUNDED'].includes((a.refundStatus || '').toUpperCase()) ||
+            (a.paymentStatus || '').toUpperCase() === 'REFUND_REQUESTED'
+        );
+        setRefundRequests(refunds.map(a => ({
+            id: a.id,
+            appointmentId: a.id,
+            patientName: a.patientName,
+            patientId: a.patientId,
+            amount: a.price,
+            testType: a.testType || a.reason,
+            requestedAt: a.refundRequestedAt || a.updatedAt || a.createdAt,
+            status: (a.refundStatus || 'PENDING').toUpperCase(),
+            reason: a.refundReason || 'Patient requested refund',
+        })));
+    };
 
     const loadRescheduleRequests = async () => {
         setRescheduleReqLoading(true);
@@ -90,7 +82,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 const list = data.rescheduleRequests || data.data || data.requests || (Array.isArray(data) ? data : []);
                 setRescheduleRequests(list);
             } else {
-                // Fallback from appointments
                 const reqs = appointments.filter(a =>
                     a.rescheduleRequested === true ||
                     (a.rescheduleStatus || '').toUpperCase() === 'REQUESTED'
@@ -136,6 +127,19 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
             });
             if (res.ok) {
                 window.showNotificationAlert && window.showNotificationAlert('Refund marked as completed ✅');
+                // Send notification to the patient about completed refund
+                try {
+                    await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/notifications/send`, {
+                        method: 'POST',
+                        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            userId: refund.patientId,
+                            title: 'Refund Completed',
+                            message: `Your refund of ${refund.amount || refund.price || ''} for ${refund.testType || refund.testName || 'your appointment'} has been processed successfully. Please check your bank account.`,
+                            type: 'REFUND_COMPLETED'
+                        }),
+                    });
+                } catch (e) { console.warn('Notification send failed:', e); }
                 loadRefundRequests();
                 onRefresh && onRefresh();
             } else {
@@ -218,7 +222,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     };
 
     // ── Group appointments ────────────────────────────────────────────────────
-        const pendingRefunds = refundRequests.filter(r => (r.status || '').toUpperCase() === 'PENDING');
+    const pendingRefunds = refundRequests.filter(r => (r.status || '').toUpperCase() === 'PENDING');
     const approvedRefunds = refundRequests.filter(r => (r.status || '').toUpperCase() === 'APPROVED');
     const alreadyRefunded = refundRequests.filter(r => (r.status || '').toUpperCase() === 'REFUNDED');
 
@@ -262,13 +266,11 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         [appointments]
     );
 
-    // All missed (any payment status)
     const allMissed = useMemo(() =>
         groupAppointments(appointments.filter(a => (a.status || '').toUpperCase() === 'MISSED')),
         [appointments]
     );
 
-    // Paid + missed, NOT yet rescheduled
     const paidButMissed = useMemo(() =>
         groupAppointments(appointments.filter(a =>
             (a.status || '').toUpperCase() === 'MISSED' &&
@@ -401,25 +403,19 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         finally { setSavingTests(false); }
     };
 
-    // ── Section pill ──────────────────────────────────────────────────────────
-    const SectionPill = ({ id, label, count, alertCount }) => (
-        <button onClick={() => {
-    setActiveSection(id);
-    setViewedSections(prev => new Set(prev).add(id));}} style={{
+    // ── Section pill (NO red badges) ──────────────────────────────────────────
+    const SectionPill = ({ id, label, count }) => (
+        <button onClick={() => setActiveSection(id)} style={{
             padding: '8px 16px', borderRadius: '8px',
             border: `2px solid ${activeSection === id ? '#667eea' : '#e5e7eb'}`,
             background: activeSection === id ? '#667eea' : 'white',
             color: activeSection === id ? 'white' : '#374151',
             fontWeight: '700', fontSize: '13px', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', gap: '6px', position: 'relative',
+            display: 'flex', alignItems: 'center', gap: '6px',
         }}>
             {label}
             {count !== undefined && (
                 <span style={{ padding: '1px 7px', borderRadius: '12px', background: activeSection === id ? 'rgba(255,255,255,0.25)' : '#f3f4f6', color: activeSection === id ? 'white' : '#6b7280', fontSize: '11px', fontWeight: '700' }}>{count}</span>
-            )}
-            {alertCount > 0 && !viewedSections.has(id) && (
-
-                <span style={{ position: 'absolute', top: '-6px', right: '-6px', width: '16px', height: '16px', borderRadius: '50%', background: '#ef4444', color: 'white', fontSize: '9px', fontWeight: '900', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{alertCount}</span>
             )}
         </button>
     );
@@ -438,7 +434,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
 
         return (
             <div style={{ background: 'white', border: `1.5px solid ${isPending ? '#fbbf24' : isMissedPaid ? '#f97316' : isRescheduled ? '#8b5cf6' : '#e5e7eb'}`, borderRadius: '10px', padding: '12px 14px', marginBottom: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-                {/* Header row */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
                     <div style={{ width: '34px', height: '34px', borderRadius: '50%', flexShrink: 0, background: 'linear-gradient(135deg,#667eea,#764ba2)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '700', fontSize: '12px' }}>
                         {group.patientName ? group.patientName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'U'}
@@ -456,7 +451,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                     </div>
                 </div>
 
-                {/* Tests */}
                 <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '7px', padding: '8px 10px', marginBottom: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
                         <span style={{ fontSize: '10px', fontWeight: '700', color: '#6b7280', textTransform: 'uppercase' }}>{group.appointments.length} Test{group.appointments.length > 1 ? 's' : ''}</span>
@@ -475,7 +469,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                     )}
                 </div>
 
-                {/* Pending payment notice */}
                 {isPending && (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fef3c7', border: '1px solid #fbbf24', borderRadius: '7px', padding: '7px 10px', marginBottom: '8px' }}>
                         <div style={{ fontSize: '11px', color: '#92400e', fontWeight: '600' }}>📲 Patient clicked "I Have Paid" — verify Sterling Bank (0089364407) and approve</div>
@@ -485,7 +478,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                     </div>
                 )}
 
-                {/* Paid + missed notice with Reschedule button */}
                 {isMissedPaid && (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff7ed', border: '1px solid #f97316', borderRadius: '7px', padding: '7px 10px', marginBottom: '8px' }}>
                         <div style={{ fontSize: '11px', color: '#9a3412', fontWeight: '600' }}>💸 Patient paid but missed. Offer a refund or reschedule.</div>
@@ -496,7 +488,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                     </div>
                 )}
 
-                {/* Rescheduled notice */}
                 {isRescheduled && (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f5f3ff', border: '1px solid #8b5cf6', borderRadius: '7px', padding: '7px 10px', marginBottom: '8px' }}>
                         <div style={{ fontSize: '11px', color: '#5b21b6', fontWeight: '600' }}>🔁 Rescheduled — awaiting new appointment attendance</div>
@@ -507,7 +498,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                     </div>
                 )}
 
-                {/* Scheduled actions */}
                 {isSchd && (
                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                         <button onClick={() => handleGroupStatus(group, 'COMPLETED')} disabled={!!actionLoading}
@@ -545,7 +535,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         </div>
     );
 
-    // ── Sub-tab pill for Missed section ───────────────────────────────────────
     const SubTabPill = ({ id, label, count, activeColor }) => (
         <button onClick={() => setMissedSubTab(id)} style={{
             padding: '6px 14px', borderRadius: '20px',
@@ -559,6 +548,27 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
             <span style={{ padding: '0 6px', borderRadius: '10px', background: missedSubTab === id ? 'rgba(255,255,255,0.3)' : '#f3f4f6', color: missedSubTab === id ? 'white' : '#6b7280', fontSize: '11px', fontWeight: '700' }}>{count}</span>
         </button>
     );
+
+    // ── Shared search bar component ───────────────────────────────────────────
+    const SearchBar = () => (
+        <div style={{ padding: '10px 16px 0' }}>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <input type="text" placeholder="🔍 Search by patient name..." value={searchName} onChange={e => setSearchName(e.target.value)}
+                    style={{ flex: 1, maxWidth: '280px', fontSize: '12px', padding: '7px 12px', border: '1.5px solid #d1d5db', borderRadius: '8px', outline: 'none' }} />
+                {searchName && (
+                    <button onClick={() => setSearchName('')}
+                        style={{ padding: '5px 10px', background: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>Clear</button>
+                )}
+            </div>
+        </div>
+    );
+
+    // ── Helper: filter refund list by search name ─────────────────────────────
+    const filterByName = (list) => {
+        const q = searchName.toLowerCase().trim();
+        if (!q) return list;
+        return list.filter(item => (item.patientName || '').toLowerCase().includes(q));
+    };
 
     // ════════════════════════════════════════════════════════════════════════
     return (
@@ -618,16 +628,61 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 </div>
             )}
 
-            {/* ── Section pills ── */}
+            {/* ── Section pills (NO red badges) ── */}
             <div style={{ display: 'flex', gap: '10px', padding: '16px 16px 0', flexWrap: 'wrap' }}>
-                <SectionPill id="pending-payments"     label="💳 Pending Payments"     count={pendingPayments.length}     alertCount={pendingPayments.length} />
-                <SectionPill id="all-missed"           label="⚠️ All Missed"            count={allMissed.length}           alertCount={allMissed.length} />
-                <SectionPill id="refund-requests"      label="💰 Refund Requests"       count={pendingRefunds.length}      alertCount={pendingRefunds.length} />
-                <SectionPill id="approved-refunds"     label="✅ Approved Refunds"      count={approvedRefunds.length}     alertCount={approvedRefunds.length} />
-                <SectionPill id="already-refunded"     label="💸 Already Refunded"      count={alreadyRefunded.length}     alertCount={0} />
-                <SectionPill id="reschedule-requests"  label="📅 Reschedule Requests"   count={rescheduleRequests.length}  alertCount={0} />
-                <SectionPill id="rescheduled"          label="🔁 Rescheduled"           count={rescheduledGroups.length}   alertCount={0} />
-                <SectionPill id="all-appointments"     label="📋 All Appointments"      count={appointments.length}        alertCount={0} />
+                <SectionPill id="pending-payments"     label="💳 Pending Payments"     count={pendingPayments.length} />
+                <SectionPill id="all-missed"           label="⚠️ All Missed"            count={allMissed.length} />
+                <SectionPill id="refund-requests"      label="💰 Refund Requests"       count={pendingRefunds.length} />
+                <SectionPill id="approved-refunds"     label="✅ Approved Refunds"      count={approvedRefunds.length} />
+                <SectionPill id="already-refunded"     label="💸 Already Refunded"      count={alreadyRefunded.length} />
+                <SectionPill id="reschedule-requests"  label="📅 Reschedule Requests"   count={rescheduleRequests.length} />
+                <SectionPill id="rescheduled"          label="🔁 Rescheduled"           count={rescheduledGroups.length} />
+                <SectionPill id="all-appointments"     label="📋 All Appointments"      count={appointments.length} />
+            </div>
+
+            {/* ── Status filter tabs (visible on ALL sections) ── */}
+            <div style={{ padding: '14px 16px 0' }}>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                    {[
+                        { key: 'all',         label: 'All',         count: counts.all,         color: '#6b7280' },
+                        { key: 'scheduled',   label: 'Scheduled',   count: counts.scheduled,   color: '#065f46' },
+                        { key: 'completed',   label: 'Completed',   count: counts.completed,   color: '#1e40af' },
+                        { key: 'missed',      label: 'Missed',      count: counts.missed,      color: '#9a3412' },
+                        { key: 'rescheduled', label: 'Rescheduled', count: counts.rescheduled, color: '#5b21b6' },
+                        { key: 'cancelled',   label: 'Cancelled',   count: counts.cancelled,   color: '#991b1b' },
+                    ].map(st => (
+                        <button key={st.key} onClick={() => setFilterStatus(st.key)} style={{ padding: '5px 12px', borderRadius: '20px', border: `2px solid ${filterStatus === st.key ? st.color : '#e5e7eb'}`, background: filterStatus === st.key ? st.color : 'white', color: filterStatus === st.key ? 'white' : st.color, fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
+                            {st.label} ({st.count})
+                        </button>
+                    ))}
+                </div>
+
+                {/* ── Shared search + filters ── */}
+                <div style={{ display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Patient Name</label>
+                        <input type="text" placeholder="Search by name..." value={searchName} onChange={e => setSearchName(e.target.value)}
+                            style={{ width: '180px', fontSize: '12px', padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: '6px' }} />
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Payment</label>
+                        <select className="form-input" value={filterPayment} onChange={e => setFilterPayment(e.target.value)} style={{ width: '160px', fontSize: '12px', padding: '5px 8px' }}>
+                            <option value="all">All Payments</option>
+                            <option value="paid">Paid</option>
+                            <option value="pending_confirmation">Pending Confirmation</option>
+                            <option value="pay_on_arrival">Pay on Arrival</option>
+                            <option value="unpaid">Unpaid</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Date</label>
+                        <input type="date" className="form-input" value={filterDate} onChange={e => setFilterDate(e.target.value)} style={{ width: '150px', fontSize: '12px', padding: '5px 8px' }} />
+                    </div>
+                    {(filterStatus !== 'all' || filterPayment !== 'all' || filterDate || searchName) && (
+                        <button onClick={() => { setFilterStatus('all'); setFilterPayment('all'); setFilterDate(''); setSearchName(''); }}
+                            style={{ padding: '6px 12px', background: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>Clear</button>
+                    )}
+                </div>
             </div>
 
             {/* ══ SECTION 1 — PENDING PAYMENTS ══ */}
@@ -649,7 +704,6 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                         subtitle="All appointments marked as missed. Switch between sub-tabs to filter."
                         count={allMissed.length} bg="linear-gradient(135deg,#ffedd5,#fed7aa)" border="#f97316" countBg="#ea580c" />
 
-                    {/* Sub-tabs: All Missed | Paid & Missed */}
                     <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
                         <SubTabPill id="all-missed"  label="All Missed"  count={allMissed.length}    activeColor="#ea580c" />
                         <SubTabPill id="paid-missed" label="💸 Paid & Missed" count={paidButMissed.length} activeColor="#db2777" />
@@ -679,7 +733,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 <div style={{ padding: '14px 16px' }}>
                     <SectionBanner icon="💰" title="Refund Requests"
                         subtitle="Pending refund requests. Approve or decline each request."
-                        count={pendingRefunds.length} bg="linear-gradient(135deg,#fce7f3,#fbcfe8)" border="#ec4899" countBg="#db2777" />
+                        count={filterByName(pendingRefunds).length} bg="linear-gradient(135deg,#fce7f3,#fbcfe8)" border="#ec4899" countBg="#db2777" />
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
                         <button onClick={() => { loadRefundRequests(); onRefresh && onRefresh(); }}
@@ -690,11 +744,9 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
 
                     {refundLoading ? (
                         <div style={{ textAlign: 'center', padding: '40px' }}><div className="spinner"></div></div>
-                    ) : refundRequests.length === 0 ? (
+                    ) : filterByName(pendingRefunds).length === 0 ? (
                         <EmptyState emoji="✅" title="No refund requests" sub="When patients request refunds from the app they will appear here" />
-                    ) : pendingRefunds.length === 0 ? (
-                        <EmptyState emoji="✅" title="No pending refund requests" sub="All refund requests have been processed" />
-                    ) : pendingRefunds.map(refund => (
+                    ) : filterByName(pendingRefunds).map(refund => (
                         <div key={refund.id} style={{ background: 'white', border: '1.5px solid #f9a8d4', borderRadius: '10px', padding: '14px', marginBottom: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
                             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '10px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -715,10 +767,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                                 </div>
                                 <span style={{
                                     padding: '3px 10px', borderRadius: '10px', fontSize: '11px', fontWeight: '700',
-                                    background: (refund.status || '').toUpperCase() === 'APPROVED' ? '#d1fae5'
-                                        : (refund.status || '').toUpperCase() === 'DECLINED' ? '#fee2e2' : '#fce7f3',
-                                    color: (refund.status || '').toUpperCase() === 'APPROVED' ? '#065f46'
-                                        : (refund.status || '').toUpperCase() === 'DECLINED' ? '#991b1b' : '#9d174d',
+                                    background: '#fce7f3', color: '#9d174d',
                                 }}>
                                     {refund.status || 'PENDING'}
                                 </span>
@@ -747,17 +796,16 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 </div>
             )}
 
-
             {/* ══ SECTION — APPROVED REFUNDS ══ */}
             {activeSection === 'approved-refunds' && (
                 <div style={{ padding: '14px 16px' }}>
                     <SectionBanner icon="✅" title="Approved Refunds"
                         subtitle="These refunds have been approved. The patient has been notified that the refund will take 2-3 working days. Mark as refunded once processed."
-                        count={approvedRefunds.length} bg="linear-gradient(135deg,#d1fae5,#a7f3d0)" border="#059669" countBg="#047857" />
+                        count={filterByName(approvedRefunds).length} bg="linear-gradient(135deg,#d1fae5,#a7f3d0)" border="#059669" countBg="#047857" />
 
-                    {approvedRefunds.length === 0 ? (
+                    {filterByName(approvedRefunds).length === 0 ? (
                         <EmptyState emoji="📭" title="No approved refunds" sub="Approved refunds will appear here after you approve a refund request" />
-                    ) : approvedRefunds.map(refund => (
+                    ) : filterByName(approvedRefunds).map(refund => (
                         <div key={refund.id} style={{ background: 'white', border: '1.5px solid #6ee7b7', borderRadius: '10px', padding: '14px', marginBottom: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
                             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '10px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -794,11 +842,11 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 <div style={{ padding: '14px 16px' }}>
                     <SectionBanner icon="💸" title="Already Refunded"
                         subtitle="Completed refunds. These patients have received their money back."
-                        count={alreadyRefunded.length} bg="linear-gradient(135deg,#e0e7ff,#c7d2fe)" border="#6366f1" countBg="#4f46e5" />
+                        count={filterByName(alreadyRefunded).length} bg="linear-gradient(135deg,#e0e7ff,#c7d2fe)" border="#6366f1" countBg="#4f46e5" />
 
-                    {alreadyRefunded.length === 0 ? (
+                    {filterByName(alreadyRefunded).length === 0 ? (
                         <EmptyState emoji="📭" title="No completed refunds yet" sub="Refunds marked as completed will appear here" />
-                    ) : alreadyRefunded.map(refund => (
+                    ) : filterByName(alreadyRefunded).map(refund => (
                         <div key={refund.id} style={{ background: 'white', border: '1.5px solid #a5b4fc', borderRadius: '10px', padding: '14px', marginBottom: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                 <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: 'linear-gradient(135deg,#6366f1,#4f46e5)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '700', fontSize: '12px', flexShrink: 0 }}>
@@ -819,7 +867,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 </div>
             )}
 
-            {/* ══ SECTION 4 — RESCHEDULE REQUESTS ══ */}
+            {/* ══ SECTION — RESCHEDULE REQUESTS ══ */}
             {activeSection === 'reschedule-requests' && (
                 <div style={{ padding: '14px 16px' }}>
                     <SectionBanner icon="📅" title="Reschedule Requests"
@@ -863,7 +911,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 </div>
             )}
 
-            {/* ══ SECTION 5 — RESCHEDULED ══ */}
+            {/* ══ SECTION — RESCHEDULED ══ */}
             {activeSection === 'rescheduled' && (
                 <div style={{ padding: '14px 16px' }}>
                     <SectionBanner icon="🔁" title="Rescheduled Appointments"
@@ -875,50 +923,9 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 </div>
             )}
 
-            {/* ══ SECTION 6 — ALL APPOINTMENTS ══ */}
+            {/* ══ SECTION — ALL APPOINTMENTS (tabs removed, uses shared filters above) ══ */}
             {activeSection === 'all-appointments' && (
                 <div style={{ padding: '14px 16px' }}>
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
-                        {[
-                            { key: 'all',         label: 'All',         count: counts.all,         color: '#6b7280' },
-                            { key: 'scheduled',   label: 'Scheduled',   count: counts.scheduled,   color: '#065f46' },
-                            { key: 'completed',   label: 'Completed',   count: counts.completed,   color: '#1e40af' },
-                            { key: 'missed',      label: 'Missed',      count: counts.missed,      color: '#9a3412' },
-                            { key: 'rescheduled', label: 'Rescheduled', count: counts.rescheduled, color: '#5b21b6' },
-                            { key: 'cancelled',   label: 'Cancelled',   count: counts.cancelled,   color: '#991b1b' },
-                        ].map(st => (
-                            <button key={st.key} onClick={() => setFilterStatus(st.key)} style={{ padding: '5px 12px', borderRadius: '20px', border: `2px solid ${filterStatus === st.key ? st.color : '#e5e7eb'}`, background: filterStatus === st.key ? st.color : 'white', color: filterStatus === st.key ? 'white' : st.color, fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
-                                {st.label} ({st.count})
-                            </button>
-                        ))}
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                        <div>
-                            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Patient Name</label>
-                            <input type="text" placeholder="Search by name..." value={searchName} onChange={e => setSearchName(e.target.value)}
-                                style={{ width: '180px', fontSize: '12px', padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: '6px' }} />
-                        </div>
-                        <div>
-                            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Payment</label>
-                            <select className="form-input" value={filterPayment} onChange={e => setFilterPayment(e.target.value)} style={{ width: '160px', fontSize: '12px', padding: '5px 8px' }}>
-                                <option value="all">All Payments</option>
-                                <option value="paid">Paid</option>
-                                <option value="pending_confirmation">Pending Confirmation</option>
-                                <option value="pay_on_arrival">Pay on Arrival</option>
-                                <option value="unpaid">Unpaid</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '3px', fontWeight: '600' }}>Date</label>
-                            <input type="date" className="form-input" value={filterDate} onChange={e => setFilterDate(e.target.value)} style={{ width: '150px', fontSize: '12px', padding: '5px 8px' }} />
-                        </div>
-                        {(filterStatus !== 'all' || filterPayment !== 'all' || filterDate || searchName) && (
-                            <button onClick={() => { setFilterStatus('all'); setFilterPayment('all'); setFilterDate(''); setSearchName(''); }}
-                                style={{ padding: '6px 12px', background: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>Clear</button>
-                        )}
-                    </div>
-
                     <div style={{ padding: '5px 10px', background: '#f3f4f6', borderRadius: '6px', marginBottom: '12px', fontSize: '12px', color: '#6b7280' }}>
                         📅 Sorted oldest first · {filteredGroups.length} group(s) · {filteredGroups.reduce((s, g) => s + g.appointments.length, 0)} appointment(s)
                     </div>

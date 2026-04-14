@@ -542,6 +542,40 @@ public ResponseEntity<?> markRefundCompleted(@PathVariable Long id, @Authenticat
         }
     }
 
+    @PostMapping("/notifications/send")
+public ResponseEntity<?> sendRefundNotification(@RequestBody Map<String, Object> body,
+                                                 @AuthenticationPrincipal UserDetails userDetails) {
+    try {
+        if (userDetails == null) {
+            return ResponseEntity.status(401).body(Map.of("success", false, "message", "Unauthorized"));
+        }
+
+        Long userId = Long.valueOf(body.get("userId").toString());
+        String title = (String) body.getOrDefault("title", "Notification");
+        String message = (String) body.getOrDefault("message", "");
+        String type = (String) body.getOrDefault("type", "alert");
+
+        // Find the user
+        Optional<User> userOpt = userRepository.findById(userId);
+        if (userOpt.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "User not found"));
+        }
+
+        // Create and save notification
+        Notification notification = new Notification(userOpt.get(), title, message, type);
+        notification.setCreatedAt(LocalDateTime.now());
+        notification.setUpdatedAt(LocalDateTime.now());
+        notificationRepository.save(notification);
+
+        logger.info("✅ Refund notification sent to user {} - {}", userId, title);
+        return ResponseEntity.ok(Map.of("success", true, "message", "Notification sent"));
+    } catch (Exception e) {
+        logger.error("❌ Error sending notification: {}", e.getMessage());
+        return ResponseEntity.status(500).body(Map.of("success", false, "message", e.getMessage()));
+    }
+}
+
+
     @PostMapping("/schedule-appointment")
     public ResponseEntity<?> scheduleAppointment(
             @Valid @RequestBody ScheduleAppointmentRequest request,
