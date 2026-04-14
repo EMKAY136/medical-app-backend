@@ -406,16 +406,16 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     // ── Section pill (NO red badges) ──────────────────────────────────────────
     const SectionPill = ({ id, label, count }) => (
         <button onClick={() => setActiveSection(id)} style={{
-            padding: '8px 16px', borderRadius: '8px',
+            padding: '5px 12px', borderRadius: '20px',
             border: `2px solid ${activeSection === id ? '#667eea' : '#e5e7eb'}`,
             background: activeSection === id ? '#667eea' : 'white',
             color: activeSection === id ? 'white' : '#374151',
-            fontWeight: '700', fontSize: '13px', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', gap: '6px',
+            fontWeight: '700', fontSize: '12px', cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: '5px',
         }}>
             {label}
             {count !== undefined && (
-                <span style={{ padding: '1px 7px', borderRadius: '12px', background: activeSection === id ? 'rgba(255,255,255,0.25)' : '#f3f4f6', color: activeSection === id ? 'white' : '#6b7280', fontSize: '11px', fontWeight: '700' }}>{count}</span>
+                <span style={{ padding: '0 6px', borderRadius: '10px', background: activeSection === id ? 'rgba(255,255,255,0.25)' : '#f3f4f6', color: activeSection === id ? 'white' : '#6b7280', fontSize: '11px', fontWeight: '700' }}>{count}</span>
             )}
         </button>
     );
