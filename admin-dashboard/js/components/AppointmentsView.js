@@ -25,10 +25,12 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     const [rescheduleRequests, setRescheduleRequests] = useState([]);
     const [rescheduleReqLoading, setRescheduleReqLoading] = useState(false);
 
+    // Reload refund/reschedule data on mount AND whenever the appointments list changes
+    // (appointments changes when the parent Dashboard refreshes, e.g. after an action)
     useEffect(() => {
         loadRefundRequests();
         loadRescheduleRequests();
-    }, []);
+    }, [appointments.length]);
 
     const loadRefundRequests = async () => {
         setRefundLoading(true);
@@ -39,7 +41,13 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
             });
             if (res.ok) {
                 const data = await res.json();
-                const list = data.refundRequests || data.data || data.requests || (Array.isArray(data) ? data : []);
+                const rawList = data.refundRequests || data.data || data.requests || (Array.isArray(data) ? data : []);
+                // Normalize status: API may return "REQUESTED", filter expects "PENDING"
+                const list = rawList.map(r => ({
+                    ...r,
+                    status: (r.status || r.refundStatus || '').toUpperCase() === 'REQUESTED' ? 'PENDING'
+                          : (r.status || r.refundStatus || '').toUpperCase() || 'PENDING',
+                }));
                 setRefundRequests(list);
             } else {
                 deriveRefundRequestsFromAppointments();
@@ -65,7 +73,10 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
             amount: a.price,
             testType: a.testType || a.reason,
             requestedAt: a.refundRequestedAt || a.updatedAt || a.createdAt,
-            status: (a.refundStatus || 'PENDING').toUpperCase(),
+            // Normalize: backend stores REQUESTED, filter expects PENDING or REQUESTED
+            status: (a.refundStatus || '').toUpperCase() === 'REQUESTED' ? 'PENDING' :
+                    (a.refundStatus || '').toUpperCase() === 'APPROVED' ? 'APPROVED' :
+                    (a.refundStatus || '').toUpperCase() === 'REJECTED' ? 'REJECTED' : 'PENDING',
             reason: a.refundReason || 'Patient requested refund',
         })));
     };
@@ -222,7 +233,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
     };
 
     // ── Group appointments ────────────────────────────────────────────────────
-    const pendingRefunds = refundRequests.filter(r => (r.status || '').toUpperCase() === 'PENDING');
+    const pendingRefunds = refundRequests.filter(r => ['PENDING','REQUESTED'].includes((r.status || '').toUpperCase()));
     const approvedRefunds = refundRequests.filter(r => (r.status || '').toUpperCase() === 'APPROVED');
     const alreadyRefunded = refundRequests.filter(r => (r.status || '').toUpperCase() === 'REFUNDED');
 

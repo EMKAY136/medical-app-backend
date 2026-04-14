@@ -101,6 +101,7 @@ const MedicalAdminDashboard = () => {
                 loadNotifications();
                 loadChatUnreadCount();
                 loadRefundRequests();
+                loadRefundRequests();
             }
         }, 10000);
 
@@ -534,7 +535,8 @@ const MedicalAdminDashboard = () => {
 
                 {/* ── APPOINTMENTS ── */}
                 {currentView === 'appointments' && React.createElement(AppointmentsView, {
-                    appointments, setShowModal, onRefresh: loadAppointments,
+                    appointments, setShowModal,
+                    onRefresh: () => { loadAppointments(); loadRefundRequests(); },
                 })}
 
                 {/* ── REPORTS ── */}
