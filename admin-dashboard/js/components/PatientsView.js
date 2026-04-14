@@ -218,4 +218,4 @@ const PatientItem = ({ patient, setSelectedPatient, setShowModal, onUpdateAppoin
             </div>
         </div>
     );
-};
+};window.PatientsView = PatientsView;

@@ -86,3 +86,4 @@ if (document.readyState === 'loading') {
 } else {
     setTimeout(initializeApp, 100);
 }
+window.MainPanel = MainPanel;

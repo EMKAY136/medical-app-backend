@@ -770,3 +770,4 @@ useEffect(() => {
         </div>
     );
 };
+window.AddResultModal = AddResultModal;

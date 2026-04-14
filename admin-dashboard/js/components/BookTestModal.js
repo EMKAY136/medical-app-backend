@@ -462,3 +462,4 @@ const BookTestModal = ({ patients = [], onClose, onSubmit, selectedPatient }) =>
         </div>
     );
 };
+window.BookTestModal = BookTestModal;

@@ -109,3 +109,4 @@ const StatsGrid = ({ stats }) => {
         </div>
     );
 };
+window.StatsGrid = StatsGrid;

@@ -28,3 +28,4 @@ const Header = () => {
         </div>
     );
 };
+window.Header = Header;

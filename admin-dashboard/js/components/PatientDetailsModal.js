@@ -299,3 +299,4 @@ const EmptyState = ({ icon, message }) => (
         <p style={{ fontSize: '16px', color: '#6b7280', fontWeight: '500' }}>{message}</p>
     </div>
 );
+window.PatientDetailsModal = PatientDetailsModal;

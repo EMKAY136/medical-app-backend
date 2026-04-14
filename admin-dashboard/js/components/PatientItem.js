@@ -253,3 +253,4 @@ const PatientItem = ({ patient, setSelectedPatient, setShowModal, onUpdateAppoin
         </div>
     );
 };
+window.PatientItem = PatientItem;

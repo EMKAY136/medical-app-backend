@@ -221,3 +221,4 @@ const SidePanel = ({ appointments, setShowModal, onApprovePayment, onRefresh }) 
         </div>
     );
 };
+window.SidePanel = SidePanel;

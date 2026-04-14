@@ -75,3 +75,4 @@ const ReportsView = ({ testResults, setShowModal }) => {
         </div>
     );
 };
+window.ReportsView = ReportsView;

@@ -35,3 +35,4 @@ const Sidebar = ({ currentView, setCurrentView, onLogout }) => {
         </div>
     );
 };
+window.Sidebar = Sidebar;

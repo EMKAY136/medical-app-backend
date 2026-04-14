@@ -959,3 +959,4 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
         </div>
     );
 };
+window.AppointmentsView = AppointmentsView;

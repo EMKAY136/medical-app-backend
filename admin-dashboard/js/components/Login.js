@@ -105,3 +105,4 @@ const Login = ({ onLoginSuccess }) => {
         </div>
     );
 };
+window.Login = Login;   
