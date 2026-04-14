@@ -46,7 +46,7 @@ public class AdminController {
     @Autowired private UserRepository userRepository;
     @Autowired private NotificationService notificationService;
     @Autowired private AppointmentService appointmentService;
-    @Autowired private AppointmentRepository appointmentRepository;   // ← NEW
+    @Autowired private AppointmentRepository appointmentRepository;
     @Autowired private TestResultService testResultService;
 
     // ==================== DASHBOARD ====================
@@ -125,12 +125,6 @@ public class AdminController {
         }
     }
 
-    // ── NEW: Appointments awaiting payment confirmation ────────────────────
-    /**
-     * Returns every appointment where the patient tapped "I Have Paid"
-     * and is waiting for the admin to verify the bank transfer.
-     * Admin frontend polls / displays these in a dedicated "Pending Payments" tab.
-     */
     @GetMapping("/appointments/pending-payment")
     public ResponseEntity<?> getPendingPaymentAppointments(
             @AuthenticationPrincipal UserDetails userDetails) {
@@ -170,13 +164,6 @@ public class AdminController {
         }
     }
 
-    // ── NEW: Approve payment ───────────────────────────────────────────────
-    /**
-     * Admin confirms they received the Sterling Bank transfer.
-     * Sets paymentStatus = PAID and fires a push + in-app notification to the patient.
-     *
-     * PATCH /api/admin/appointments/{id}/approve-payment
-     */
     @PatchMapping("/appointments/{appointmentId}/approve-payment")
     public ResponseEntity<?> approvePayment(
             @PathVariable Long appointmentId,
@@ -192,7 +179,6 @@ public class AdminController {
 
             Appointment appointment = aptOpt.get();
 
-            // Guard: only approve appointments that are actually pending
             if (appointment.getPaymentStatus() != Appointment.PaymentStatus.PENDING_CONFIRMATION) {
                 return ResponseEntity.badRequest().body(Map.of(
                         "success", false,
@@ -206,7 +192,6 @@ public class AdminController {
             appointment.setUpdatedAt(LocalDateTime.now());
             appointmentRepository.save(appointment);
 
-            // Fire notification to patient
             autoNotificationService.onPaymentApproved(appointment);
 
             logger.info("✅ Payment approved for appointment {}", appointmentId);
@@ -224,23 +209,12 @@ public class AdminController {
         }
     }
 
-    // ── NEW: Mark appointment as missed ────────────────────────────────────
-    /**
-     * Called by:
-     *   - The mobile app automatically (when the date passes)
-     *   - The admin manually via the admin panel
-     *
-     * PATCH /api/admin/appointments/{id}/mark-missed
-     * Also reachable at /api/appointments/{id}/mark-missed from the mobile (add to AppointmentController too).
-     */
     @PatchMapping("/appointments/{appointmentId}/mark-missed")
     public ResponseEntity<?> markAppointmentMissed(
             @PathVariable Long appointmentId,
             @AuthenticationPrincipal UserDetails userDetails) {
         try {
             logger.info("=== MARK MISSED === Appointment: {}", appointmentId);
-            // Note: we allow this even without admin token because the mobile app calls it;
-            // the mobile request still carries the patient JWT which passes the security filter.
 
             Optional<Appointment> aptOpt = appointmentRepository.findById(appointmentId);
             if (aptOpt.isEmpty())
@@ -248,7 +222,6 @@ public class AdminController {
 
             Appointment appointment = aptOpt.get();
 
-            // Idempotent: if already missed/completed just return success
             if (appointment.getStatus() != Appointment.Status.SCHEDULED) {
                 return ResponseEntity.ok(Map.of(
                         "success", true,
@@ -256,14 +229,12 @@ public class AdminController {
                         "status",  appointment.getStatus().name()));
             }
 
-            // Admin can always mark an appointment missed — no date guard
             LocalDateTime now = LocalDateTime.now();
 
             appointment.setStatus(Appointment.Status.MISSED);
             appointment.setUpdatedAt(now);
             appointmentRepository.save(appointment);
 
-            // Notify the patient
             autoNotificationService.onAppointmentMissed(appointment);
 
             logger.info("✅ Appointment {} marked as MISSED", appointmentId);
@@ -282,45 +253,42 @@ public class AdminController {
     // ── Refund requests ───────────────────────────────────────────────────────
 
     @GetMapping("/refund-requests")
-public ResponseEntity<?> getRefundRequests(@AuthenticationPrincipal UserDetails userDetails) {
-    try {
-        if (userDetails == null) return unauth();
-        // Fetch ALL refund statuses, not just REQUESTED
-        List<Appointment> list = appointmentRepository.findByRefundStatusIn(
-            List.of(Appointment.RefundStatus.REQUESTED, 
-                    Appointment.RefundStatus.APPROVED, 
-                    Appointment.RefundStatus.REFUNDED)
-        );
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (Appointment apt : list) {
-            Map<String, Object> row = new HashMap<>();
-            row.put("id",            apt.getId());
-            row.put("appointmentId", apt.getId());
-            row.put("patientId",     apt.getPatient().getId());
-            row.put("patientName",   apt.getPatient().getFirstName() + " " + apt.getPatient().getLastName());
-            row.put("testType",      apt.getTestType() != null ? apt.getTestType() : apt.getReason());
-            row.put("testName",      apt.getTestType() != null ? apt.getTestType() : apt.getReason());
-            row.put("amount",        apt.getPrice());
-            row.put("price",         apt.getPrice());
-            row.put("reason",        apt.getRefundReason());
-            // Use actual refund status instead of hardcoding "PENDING"
-            row.put("status",        apt.getRefundStatus().name());
-            row.put("refundStatus",  apt.getRefundStatus().name());
-            row.put("requestedAt",   apt.getRefundRequestedAt());
-            row.put("approvedAt",    apt.getRefundApprovedAt());
-            row.put("approvedBy",    apt.getRefundApprovedBy());
-            row.put("paymentStatus", apt.getPaymentStatus() != null ? apt.getPaymentStatus().name() : "PAID");
-            row.put("appointmentDate", apt.getAppointmentDate());
-            row.put("createdAt",     apt.getCreatedAt());
-            result.add(row);
+    public ResponseEntity<?> getRefundRequests(@AuthenticationPrincipal UserDetails userDetails) {
+        try {
+            if (userDetails == null) return unauth();
+            List<Appointment> list = appointmentRepository.findByRefundStatusIn(
+                List.of(Appointment.RefundStatus.REQUESTED,
+                        Appointment.RefundStatus.APPROVED,
+                        Appointment.RefundStatus.REFUNDED)
+            );
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (Appointment apt : list) {
+                Map<String, Object> row = new HashMap<>();
+                row.put("id",            apt.getId());
+                row.put("appointmentId", apt.getId());
+                row.put("patientId",     apt.getPatient().getId());
+                row.put("patientName",   apt.getPatient().getFirstName() + " " + apt.getPatient().getLastName());
+                row.put("testType",      apt.getTestType() != null ? apt.getTestType() : apt.getReason());
+                row.put("testName",      apt.getTestType() != null ? apt.getTestType() : apt.getReason());
+                row.put("amount",        apt.getPrice());
+                row.put("price",         apt.getPrice());
+                row.put("reason",        apt.getRefundReason());
+                row.put("status",        apt.getRefundStatus().name());
+                row.put("refundStatus",  apt.getRefundStatus().name());
+                row.put("requestedAt",   apt.getRefundRequestedAt());
+                row.put("approvedAt",    apt.getRefundApprovedAt());
+                row.put("approvedBy",    apt.getRefundApprovedBy());
+                row.put("paymentStatus", apt.getPaymentStatus() != null ? apt.getPaymentStatus().name() : "PAID");
+                row.put("appointmentDate", apt.getAppointmentDate());
+                row.put("createdAt",     apt.getCreatedAt());
+                result.add(row);
+            }
+            return ResponseEntity.ok(Map.of("success", true, "refundRequests", result, "count", result.size()));
+        } catch (Exception e) {
+            logger.error("Error fetching refund requests: {}", e.getMessage());
+            return error500(e.getMessage());
         }
-        return ResponseEntity.ok(Map.of("success", true, "refundRequests", result, "count", result.size()));
-    } catch (Exception e) {
-        logger.error("Error fetching refund requests: {}", e.getMessage());
-        return error500(e.getMessage());
     }
-}
-
 
     @PostMapping("/refund-requests/{id}/approve")
     public ResponseEntity<?> approveRefundRequest(@PathVariable Long id, @AuthenticationPrincipal UserDetails userDetails) {
@@ -341,19 +309,18 @@ public ResponseEntity<?> getRefundRequests(@AuthenticationPrincipal UserDetails 
     }
 
     @PostMapping("/refund-requests/{id}/mark-refunded")
-public ResponseEntity<?> markRefundCompleted(@PathVariable Long id, @AuthenticationPrincipal UserDetails userDetails) {
-    try {
-        if (userDetails == null) return unauth();
-        Optional<Appointment> aptOpt = appointmentRepository.findById(id);
-        if (aptOpt.isEmpty()) return ResponseEntity.badRequest().body(Map.of("success", false, "message", "Not found"));
-        Appointment apt = aptOpt.get();
-        apt.setRefundStatus(Appointment.RefundStatus.REFUNDED);
-        apt.setUpdatedAt(LocalDateTime.now());
-        appointmentRepository.save(apt);
-        return ResponseEntity.ok(Map.of("success", true, "message", "Refund marked as completed"));
-    } catch (Exception e) { return error500(e.getMessage()); }
-}
-
+    public ResponseEntity<?> markRefundCompleted(@PathVariable Long id, @AuthenticationPrincipal UserDetails userDetails) {
+        try {
+            if (userDetails == null) return unauth();
+            Optional<Appointment> aptOpt = appointmentRepository.findById(id);
+            if (aptOpt.isEmpty()) return ResponseEntity.badRequest().body(Map.of("success", false, "message", "Not found"));
+            Appointment apt = aptOpt.get();
+            apt.setRefundStatus(Appointment.RefundStatus.REFUNDED);
+            apt.setUpdatedAt(LocalDateTime.now());
+            appointmentRepository.save(apt);
+            return ResponseEntity.ok(Map.of("success", true, "message", "Refund marked as completed"));
+        } catch (Exception e) { return error500(e.getMessage()); }
+    }
 
     @PostMapping("/refund-requests/{id}/decline")
     public ResponseEntity<?> declineRefundRequest(@PathVariable Long id, @AuthenticationPrincipal UserDetails userDetails) {
@@ -470,10 +437,6 @@ public ResponseEntity<?> markRefundCompleted(@PathVariable Long id, @Authenticat
         }
     }
 
-    /**
-     * Patient-initiated booking from the mobile app.
-     * Now carries price + paymentStatus + paymentMethod from the booking flow.
-     */
     @PostMapping("/book-test-with-notification")
     public ResponseEntity<?> bookTestWithNotification(
             @Valid @RequestBody BookTestRequest request,
@@ -494,7 +457,6 @@ public ResponseEntity<?> markRefundCompleted(@PathVariable Long id, @Authenticat
             appointment.setNotes(request.getNotes() != null ? request.getNotes() : "");
             appointment.setStatus(Appointment.Status.SCHEDULED);
 
-            // ── Payment fields ──────────────────────────────────────────
             if (request.getPrice() != null)
                 appointment.setPrice(request.getPrice());
             if (request.getPaymentStatus() != null)
@@ -504,7 +466,6 @@ public ResponseEntity<?> markRefundCompleted(@PathVariable Long id, @Authenticat
             if (request.getPaymentMethod() != null)
                 appointment.setPaymentMethod(request.getPaymentMethod());
 
-            // ── Date + time ─────────────────────────────────────────────
             LocalDateTime dt;
             if (request.getScheduledDate() != null && request.getScheduledTime() != null) {
                 dt = LocalDateTime.of(request.getScheduledDate(), request.getScheduledTime());
@@ -519,7 +480,6 @@ public ResponseEntity<?> markRefundCompleted(@PathVariable Long id, @Authenticat
             appointment.setCreatedAt(LocalDateTime.now());
             appointment.setUpdatedAt(LocalDateTime.now());
 
-            // bookTest also fires the "test booked" push notification
             Appointment saved = appointmentService.bookTest(appointment);
 
             logger.info("✅ Booked. ID: {}, Time: {}, PaymentStatus: {}",
@@ -541,40 +501,6 @@ public ResponseEntity<?> markRefundCompleted(@PathVariable Long id, @Authenticat
             return error500("Error booking test: " + e.getMessage());
         }
     }
-
-    @PostMapping("/notifications/send")
-public ResponseEntity<?> sendRefundNotification(@RequestBody Map<String, Object> body,
-                                                 @AuthenticationPrincipal UserDetails userDetails) {
-    try {
-        if (userDetails == null) {
-            return ResponseEntity.status(401).body(Map.of("success", false, "message", "Unauthorized"));
-        }
-
-        Long userId = Long.valueOf(body.get("userId").toString());
-        String title = (String) body.getOrDefault("title", "Notification");
-        String message = (String) body.getOrDefault("message", "");
-        String type = (String) body.getOrDefault("type", "alert");
-
-        // Find the user
-        Optional<User> userOpt = userRepository.findById(userId);
-        if (userOpt.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "User not found"));
-        }
-
-        // Create and save notification
-        Notification notification = new Notification(userOpt.get(), title, message, type);
-        notification.setCreatedAt(LocalDateTime.now());
-        notification.setUpdatedAt(LocalDateTime.now());
-        notificationRepository.save(notification);
-
-        logger.info("✅ Refund notification sent to user {} - {}", userId, title);
-        return ResponseEntity.ok(Map.of("success", true, "message", "Notification sent"));
-    } catch (Exception e) {
-        logger.error("❌ Error sending notification: {}", e.getMessage());
-        return ResponseEntity.status(500).body(Map.of("success", false, "message", e.getMessage()));
-    }
-}
-
 
     @PostMapping("/schedule-appointment")
     public ResponseEntity<?> scheduleAppointment(
@@ -670,17 +596,33 @@ public ResponseEntity<?> sendRefundNotification(@RequestBody Map<String, Object>
 
     // ==================== NOTIFICATIONS ====================
 
+    /**
+     * Unified send-notification endpoint.
+     * Accepts either "userId" or "recipientId" in the JSON body for backward compatibility.
+     */
     @PostMapping("/notifications/send")
-    public ResponseEntity<?> sendNotification(@RequestBody Map<String, Object> payload,
-                                             @AuthenticationPrincipal UserDetails userDetails) {
+    public ResponseEntity<?> sendNotification(@RequestBody Map<String, Object> body,
+                                              @AuthenticationPrincipal UserDetails userDetails) {
         try {
             if (userDetails == null) return unauth();
-            Long recipientId = ((Number) payload.get("recipientId")).longValue();
-            String title   = (String) payload.get("title");
-            String message = (String) payload.get("message");
-            String type    = (String) payload.get("type");
-            autoNotificationService.sendManualNotification(recipientId, title, message, type);
-            logger.info("✅ Notification sent to patient {}", recipientId);
+
+            // Support both "userId" and "recipientId" keys
+            Long targetUserId;
+            if (body.containsKey("recipientId")) {
+                targetUserId = ((Number) body.get("recipientId")).longValue();
+            } else if (body.containsKey("userId")) {
+                targetUserId = Long.valueOf(body.get("userId").toString());
+            } else {
+                return ResponseEntity.badRequest().body(Map.of("success", false, "message", "recipientId or userId is required"));
+            }
+
+            String title   = (String) body.getOrDefault("title", "Notification");
+            String message = (String) body.getOrDefault("message", "");
+            String type    = (String) body.getOrDefault("type", "alert");
+
+            autoNotificationService.sendManualNotification(targetUserId, title, message, type);
+
+            logger.info("✅ Notification sent to user {} - {}", targetUserId, title);
             return ResponseEntity.ok(Map.of("success", true, "message", "Notification sent successfully"));
         } catch (Exception e) {
             logger.error("❌ Error sending notification: {}", e.getMessage());
