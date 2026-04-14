@@ -23,7 +23,7 @@ public class AppointmentDto {
     private Long   patientId;
     private String patientName;
 
-    // ── NEW: Payment fields ──────────────────────────────────────────────────
+    // ── Payment fields ───────────────────────────────────────────────────────
     /** Display price string e.g. "₦7,000.00" */
     private String price;
 
@@ -46,20 +46,34 @@ public class AppointmentDto {
     /** Username of the admin who approved the payment */
     private String paymentApprovedBy;
 
+    // ── Refund fields ────────────────────────────────────────────────────────
+    private String        refundStatus;
+    private String        refundReason;
+    private LocalDateTime refundRequestedAt;
+    private LocalDateTime refundApprovedAt;
+    private String        refundApprovedBy;
+
+    // ── Reschedule fields ────────────────────────────────────────────────────
+    /**
+     * NONE | REQUESTED | APPROVED | REJECTED
+     * Defaults to NONE.
+     */
+    private String        rescheduleStatus;
+    private String        rescheduleReason;
+    private String        reschedulePreferredDate;   // stored as String (e.g. "2025-07-10")
+    private String        reschedulePreferredTime;   // stored as String (e.g. "10:00")
+    private LocalDateTime rescheduleRequestedAt;
+    private LocalDateTime rescheduleApprovedAt;
+    private String        rescheduleApprovedBy;
+
     // ── Audit ────────────────────────────────────────────────────────────────
     private LocalDateTime createdAt;
-
-    private String refundStatus;
-private String refundReason;
-private LocalDateTime refundRequestedAt;
-private LocalDateTime refundApprovedAt;
-private String refundApprovedBy;
 
     // ── Constructors ─────────────────────────────────────────────────────────
 
     public AppointmentDto() {}
 
-    // ── Getters & Setters ─────────────────────────────────────────────────────
+    // ── Getters & Setters — Core ──────────────────────────────────────────────
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -91,7 +105,7 @@ private String refundApprovedBy;
     public String getPatientName() { return patientName; }
     public void setPatientName(String patientName) { this.patientName = patientName; }
 
-    // Payment
+    // ── Payment getters/setters ──────────────────────────────────────────────
 
     public String getPrice() { return price; }
     public void setPrice(String price) { this.price = price; }
@@ -108,21 +122,48 @@ private String refundApprovedBy;
     public String getPaymentApprovedBy() { return paymentApprovedBy; }
     public void setPaymentApprovedBy(String paymentApprovedBy) { this.paymentApprovedBy = paymentApprovedBy; }
 
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    // ── Refund getters/setters ───────────────────────────────────────────────
 
     public String getRefundStatus() { return refundStatus; }
-public void setRefundStatus(String refundStatus) { this.refundStatus = refundStatus; }
+    public void setRefundStatus(String refundStatus) { this.refundStatus = refundStatus; }
 
-public String getRefundReason() { return refundReason; }
-public void setRefundReason(String refundReason) { this.refundReason = refundReason; }
+    public String getRefundReason() { return refundReason; }
+    public void setRefundReason(String refundReason) { this.refundReason = refundReason; }
 
-public LocalDateTime getRefundRequestedAt() { return refundRequestedAt; }
-public void setRefundRequestedAt(LocalDateTime refundRequestedAt) { this.refundRequestedAt = refundRequestedAt; }
+    public LocalDateTime getRefundRequestedAt() { return refundRequestedAt; }
+    public void setRefundRequestedAt(LocalDateTime refundRequestedAt) { this.refundRequestedAt = refundRequestedAt; }
 
-public LocalDateTime getRefundApprovedAt() { return refundApprovedAt; }
-public void setRefundApprovedAt(LocalDateTime refundApprovedAt) { this.refundApprovedAt = refundApprovedAt; }
+    public LocalDateTime getRefundApprovedAt() { return refundApprovedAt; }
+    public void setRefundApprovedAt(LocalDateTime refundApprovedAt) { this.refundApprovedAt = refundApprovedAt; }
 
-public String getRefundApprovedBy() { return refundApprovedBy; }
-public void setRefundApprovedBy(String refundApprovedBy) { this.refundApprovedBy = refundApprovedBy; }
+    public String getRefundApprovedBy() { return refundApprovedBy; }
+    public void setRefundApprovedBy(String refundApprovedBy) { this.refundApprovedBy = refundApprovedBy; }
+
+    // ── Reschedule getters/setters ───────────────────────────────────────────
+
+    public String getRescheduleStatus() { return rescheduleStatus; }
+    public void setRescheduleStatus(String rescheduleStatus) { this.rescheduleStatus = rescheduleStatus; }
+
+    public String getRescheduleReason() { return rescheduleReason; }
+    public void setRescheduleReason(String rescheduleReason) { this.rescheduleReason = rescheduleReason; }
+
+    public String getReschedulePreferredDate() { return reschedulePreferredDate; }
+    public void setReschedulePreferredDate(String reschedulePreferredDate) { this.reschedulePreferredDate = reschedulePreferredDate; }
+
+    public String getReschedulePreferredTime() { return reschedulePreferredTime; }
+    public void setReschedulePreferredTime(String reschedulePreferredTime) { this.reschedulePreferredTime = reschedulePreferredTime; }
+
+    public LocalDateTime getRescheduleRequestedAt() { return rescheduleRequestedAt; }
+    public void setRescheduleRequestedAt(LocalDateTime rescheduleRequestedAt) { this.rescheduleRequestedAt = rescheduleRequestedAt; }
+
+    public LocalDateTime getRescheduleApprovedAt() { return rescheduleApprovedAt; }
+    public void setRescheduleApprovedAt(LocalDateTime rescheduleApprovedAt) { this.rescheduleApprovedAt = rescheduleApprovedAt; }
+
+    public String getRescheduleApprovedBy() { return rescheduleApprovedBy; }
+    public void setRescheduleApprovedBy(String rescheduleApprovedBy) { this.rescheduleApprovedBy = rescheduleApprovedBy; }
+
+    // ── Audit getters/setters ────────────────────────────────────────────────
+
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

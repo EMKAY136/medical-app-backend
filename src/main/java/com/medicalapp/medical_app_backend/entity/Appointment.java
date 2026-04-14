@@ -49,49 +49,73 @@ public class Appointment {
     @Column(name = "department")
     private String department;
 
-    // ── NEW: Price ───────────────────────────────────────────────────────────
+    // ── Price ────────────────────────────────────────────────────────────────
     @Column(name = "price")
     private String price;
 
-    // ── NEW: Payment status ──────────────────────────────────────────────────
+    // ── Payment status ───────────────────────────────────────────────────────
     @Enumerated(EnumType.STRING)
     @Column(name = "payment_status")
     private PaymentStatus paymentStatus = PaymentStatus.UNPAID;
 
-    // ── NEW: Payment method ──────────────────────────────────────────────────
+    // ── Payment method ───────────────────────────────────────────────────────
     @Column(name = "payment_method")
     private String paymentMethod; // PAY_NOW | PAY_ON_ARRIVAL
 
-    // ── NEW: When admin approved payment ────────────────────────────────────
+    // ── When admin approved payment ──────────────────────────────────────────
     @Column(name = "payment_approved_at")
     private LocalDateTime paymentApprovedAt;
 
-    // ── NEW: Admin who approved ──────────────────────────────────────────────
+    // ── Admin who approved payment ───────────────────────────────────────────
     @Column(name = "payment_approved_by")
     private String paymentApprovedBy;
 
+    // ── Refund ───────────────────────────────────────────────────────────────
+    @Enumerated(EnumType.STRING)
+    @Column(name = "refund_status")
+    private RefundStatus refundStatus = RefundStatus.NONE;
+
+    @Column(name = "refund_reason", columnDefinition = "TEXT")
+    private String refundReason;
+
+    @Column(name = "refund_requested_at")
+    private LocalDateTime refundRequestedAt;
+
+    @Column(name = "refund_approved_at")
+    private LocalDateTime refundApprovedAt;
+
+    @Column(name = "refund_approved_by")
+    private String refundApprovedBy;
+
+    // ── Reschedule ───────────────────────────────────────────────────────────
+    @Enumerated(EnumType.STRING)
+    @Column(name = "reschedule_status")
+    private RescheduleStatus rescheduleStatus = RescheduleStatus.NONE;
+
+    @Column(name = "reschedule_reason", columnDefinition = "TEXT")
+    private String rescheduleReason;
+
+    @Column(name = "reschedule_preferred_date")
+    private String reschedulePreferredDate;
+
+    @Column(name = "reschedule_preferred_time")
+    private String reschedulePreferredTime;
+
+    @Column(name = "reschedule_requested_at")
+    private LocalDateTime rescheduleRequestedAt;
+
+    @Column(name = "reschedule_approved_at")
+    private LocalDateTime rescheduleApprovedAt;
+
+    @Column(name = "reschedule_approved_by")
+    private String rescheduleApprovedBy;
+
+    // ── Audit ────────────────────────────────────────────────────────────────
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 
     @Column(name = "updated_at")
     private LocalDateTime updatedAt = LocalDateTime.now();
-
-    @Enumerated(EnumType.STRING)
-@Column(name = "refund_status")
-private RefundStatus refundStatus = RefundStatus.NONE;
-
-@Column(name = "refund_reason", columnDefinition = "TEXT")
-private String refundReason;
-
-@Column(name = "refund_requested_at")
-private LocalDateTime refundRequestedAt;
-
-@Column(name = "refund_approved_at")
-private LocalDateTime refundApprovedAt;
-
-@Column(name = "refund_approved_by")
-private String refundApprovedBy;
-
 
     // ────────────────────────────────────────────────────────────────────────
     // Constructors
@@ -121,12 +145,37 @@ private String refundApprovedBy;
         }
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    // Enums
+    // ────────────────────────────────────────────────────────────────────────
+
+    public enum Status {
+        SCHEDULED, COMPLETED, CANCELLED, NO_SHOW,
+        /** Appointment date passed without completion */
+        MISSED
+    }
+
+    public enum PaymentStatus {
+        /** Patient has not paid and chose no option yet */
+        UNPAID,
+        /** Patient transferred money, waiting for admin to confirm */
+        PENDING_CONFIRMATION,
+        /** Admin confirmed the bank transfer was received */
+        PAID,
+        /** Patient chose to pay when they arrive */
+        PAY_ON_ARRIVAL
+    }
+
     public enum RefundStatus {
-    NONE, REQUESTED, APPROVED, REJECTED
-}
+        NONE, REQUESTED, APPROVED, REJECTED
+    }
+
+    public enum RescheduleStatus {
+        NONE, REQUESTED, APPROVED, REJECTED
+    }
 
     // ────────────────────────────────────────────────────────────────────────
-    // Getters & Setters
+    // Getters & Setters — Core
     // ────────────────────────────────────────────────────────────────────────
 
     public Long getId() { return id; }
@@ -184,12 +233,12 @@ private String refundApprovedBy;
             this.status = Status.valueOf(status.toUpperCase());
         } catch (IllegalArgumentException e) {
             switch (status.toLowerCase()) {
-                case "scheduled"         -> this.status = Status.SCHEDULED;
-                case "completed"         -> this.status = Status.COMPLETED;
-                case "cancelled"         -> this.status = Status.CANCELLED;
-                case "missed"            -> this.status = Status.MISSED;
-                case "no-show","no_show" -> this.status = Status.NO_SHOW;
-                default                  -> this.status = Status.SCHEDULED;
+                case "scheduled"          -> this.status = Status.SCHEDULED;
+                case "completed"          -> this.status = Status.COMPLETED;
+                case "cancelled"          -> this.status = Status.CANCELLED;
+                case "missed"             -> this.status = Status.MISSED;
+                case "no-show", "no_show" -> this.status = Status.NO_SHOW;
+                default                   -> this.status = Status.SCHEDULED;
             }
         }
     }
@@ -238,27 +287,53 @@ private String refundApprovedBy;
     public String getPaymentApprovedBy() { return paymentApprovedBy; }
     public void setPaymentApprovedBy(String paymentApprovedBy) { this.paymentApprovedBy = paymentApprovedBy; }
 
+    // ── Refund getters/setters ───────────────────────────────────────────────
+
+    public RefundStatus getRefundStatus() { return refundStatus; }
+    public void setRefundStatus(RefundStatus refundStatus) { this.refundStatus = refundStatus; }
+
+    public String getRefundReason() { return refundReason; }
+    public void setRefundReason(String refundReason) { this.refundReason = refundReason; }
+
+    public LocalDateTime getRefundRequestedAt() { return refundRequestedAt; }
+    public void setRefundRequestedAt(LocalDateTime refundRequestedAt) { this.refundRequestedAt = refundRequestedAt; }
+
+    public LocalDateTime getRefundApprovedAt() { return refundApprovedAt; }
+    public void setRefundApprovedAt(LocalDateTime refundApprovedAt) { this.refundApprovedAt = refundApprovedAt; }
+
+    public String getRefundApprovedBy() { return refundApprovedBy; }
+    public void setRefundApprovedBy(String refundApprovedBy) { this.refundApprovedBy = refundApprovedBy; }
+
+    // ── Reschedule getters/setters ───────────────────────────────────────────
+
+    public RescheduleStatus getRescheduleStatus() { return rescheduleStatus; }
+    public void setRescheduleStatus(RescheduleStatus rescheduleStatus) { this.rescheduleStatus = rescheduleStatus; }
+
+    public String getRescheduleReason() { return rescheduleReason; }
+    public void setRescheduleReason(String rescheduleReason) { this.rescheduleReason = rescheduleReason; }
+
+    public String getReschedulePreferredDate() { return reschedulePreferredDate; }
+    public void setReschedulePreferredDate(String reschedulePreferredDate) { this.reschedulePreferredDate = reschedulePreferredDate; }
+
+    public String getReschedulePreferredTime() { return reschedulePreferredTime; }
+    public void setReschedulePreferredTime(String reschedulePreferredTime) { this.reschedulePreferredTime = reschedulePreferredTime; }
+
+    public LocalDateTime getRescheduleRequestedAt() { return rescheduleRequestedAt; }
+    public void setRescheduleRequestedAt(LocalDateTime rescheduleRequestedAt) { this.rescheduleRequestedAt = rescheduleRequestedAt; }
+
+    public LocalDateTime getRescheduleApprovedAt() { return rescheduleApprovedAt; }
+    public void setRescheduleApprovedAt(LocalDateTime rescheduleApprovedAt) { this.rescheduleApprovedAt = rescheduleApprovedAt; }
+
+    public String getRescheduleApprovedBy() { return rescheduleApprovedBy; }
+    public void setRescheduleApprovedBy(String rescheduleApprovedBy) { this.rescheduleApprovedBy = rescheduleApprovedBy; }
+
+    // ── Audit getters/setters ────────────────────────────────────────────────
+
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
-
-
-    public RefundStatus getRefundStatus() { return refundStatus; }
-public void setRefundStatus(RefundStatus refundStatus) { this.refundStatus = refundStatus; }
-
-public String getRefundReason() { return refundReason; }
-public void setRefundReason(String refundReason) { this.refundReason = refundReason; }
-
-public LocalDateTime getRefundRequestedAt() { return refundRequestedAt; }
-public void setRefundRequestedAt(LocalDateTime refundRequestedAt) { this.refundRequestedAt = refundRequestedAt; }
-
-public LocalDateTime getRefundApprovedAt() { return refundApprovedAt; }
-public void setRefundApprovedAt(LocalDateTime refundApprovedAt) { this.refundApprovedAt = refundApprovedAt; }
-
-public String getRefundApprovedBy() { return refundApprovedBy; }
-public void setRefundApprovedBy(String refundApprovedBy) { this.refundApprovedBy = refundApprovedBy; }
 
     // ────────────────────────────────────────────────────────────────────────
     // JPA lifecycle
@@ -277,27 +352,6 @@ public void setRefundApprovedBy(String refundApprovedBy) { this.refundApprovedBy
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
         syncAppointmentDate();
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // Enums
-    // ────────────────────────────────────────────────────────────────────────
-
-    public enum Status {
-        SCHEDULED, COMPLETED, CANCELLED, NO_SHOW,
-        /** NEW — appointment date passed without completion */
-        MISSED
-    }
-
-    public enum PaymentStatus {
-        /** Patient has not paid and chose no option yet */
-        UNPAID,
-        /** Patient transferred money, waiting for admin to confirm */
-        PENDING_CONFIRMATION,
-        /** Admin confirmed the bank transfer was received */
-        PAID,
-        /** Patient chose to pay when they arrive */
-        PAY_ON_ARRIVAL
     }
 
     // ────────────────────────────────────────────────────────────────────────
