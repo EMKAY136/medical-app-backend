@@ -560,6 +560,9 @@ public Map<String, Object> endChatSession(UserDetails userDetails) {
         return response;
     }
 
+
+    
+
     public Map<String, Object> getDebugInfo(UserDetails agentDetails) {
         Map<String, Object> response = new HashMap<>();
         
@@ -681,6 +684,100 @@ public Map<String, Object> endChatSession(UserDetails userDetails) {
 
         return response;
     }
+
+    public Map<String, Object> endChatSession(UserDetails userDetails) {
+    Map<String, Object> response = new HashMap<>();
+    try {
+        Optional<User> userOpt = userRepository.findByUsername(userDetails.getUsername());
+        if (userOpt.isEmpty()) {
+            response.put("success", false);
+            response.put("message", "User not found");
+            return response;
+        }
+        User user = userOpt.get();
+
+        // DELETE all chat messages for this user (clears both sides)
+        List<ChatMessage> userMessages = chatMessageRepository.findByUserOrderByCreatedAtAsc(user);
+        if (!userMessages.isEmpty()) {
+            chatMessageRepository.deleteAll(userMessages);
+            System.out.println("Deleted " + userMessages.size() + " messages for user " + user.getId());
+        }
+
+        // Notify admin via WebSocket
+        try {
+            Map<String, Object> event = new HashMap<>();
+            event.put("event", "SESSION_ENDED");
+            event.put("userId", user.getId());
+            event.put("userName", user.getFirstName() + " " + user.getLastName());
+            event.put("timestamp", LocalDateTime.now().toString());
+            messagingTemplate.convertAndSend("/topic/admin/new-message", event);
+        } catch (Exception e) {
+            System.err.println("WebSocket event failed: " + e.getMessage());
+        }
+
+        response.put("success", true);
+        response.put("message", "Session ended, chat history cleared");
+    } catch (Exception e) {
+        response.put("success", false);
+        response.put("message", "Error ending session: " + e.getMessage());
+    }
+    return response;
+}
+
+/**
+ * Admin-initiated session end — deletes all messages for a specific patient.
+ * Called from admin dashboard "End Session & Clear" button.
+ */
+public Map<String, Object> adminEndChatSession(Long userId, UserDetails agentDetails) {
+    Map<String, Object> response = new HashMap<>();
+    try {
+        Optional<User> agentOpt = userRepository.findByUsername(agentDetails.getUsername());
+        if (agentOpt.isEmpty()) {
+            response.put("success", false);
+            response.put("message", "Agent not found");
+            return response;
+        }
+        User agent = agentOpt.get();
+        if (!hasRole(agent, "SUPPORT_AGENT") && !hasRole(agent, "ADMIN")) {
+            response.put("success", false);
+            response.put("message", "Unauthorized");
+            return response;
+        }
+
+        Optional<User> userOpt = userRepository.findById(userId);
+        if (userOpt.isEmpty()) {
+            response.put("success", false);
+            response.put("message", "Patient not found");
+            return response;
+        }
+        User user = userOpt.get();
+
+        // DELETE all chat messages for this patient
+        List<ChatMessage> userMessages = chatMessageRepository.findByUserOrderByCreatedAtAsc(user);
+        if (!userMessages.isEmpty()) {
+            chatMessageRepository.deleteAll(userMessages);
+            System.out.println("Admin deleted " + userMessages.size() + " messages for user " + userId);
+        }
+
+        // Notify via WebSocket so patient UI clears
+        try {
+            Map<String, Object> event = new HashMap<>();
+            event.put("event", "SESSION_ENDED");
+            event.put("userId", userId);
+            event.put("timestamp", LocalDateTime.now().toString());
+            messagingTemplate.convertAndSend("/topic/admin/new-message", event);
+        } catch (Exception e) {
+            System.err.println("WebSocket event failed: " + e.getMessage());
+        }
+
+        response.put("success", true);
+        response.put("message", "Session ended, all chat history cleared");
+    } catch (Exception e) {
+        response.put("success", false);
+        response.put("message", "Error: " + e.getMessage());
+    }
+    return response;
+}
 
     public Map<String, Object> getUserSupportTickets(UserDetails userDetails) {
         Map<String, Object> response = new HashMap<>();

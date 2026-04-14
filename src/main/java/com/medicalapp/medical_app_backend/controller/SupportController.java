@@ -369,6 +369,25 @@ public class SupportController {
         }
     }
     
+
+    @PostMapping("/admin/end-session/{userId}")
+public ResponseEntity<Map<String, Object>> adminEndSession(
+        @PathVariable Long userId,
+        @AuthenticationPrincipal UserDetails userDetails) {
+    try {
+        if (userDetails == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "Authentication required"));
+        }
+        Map<String, Object> response = supportService.adminEndChatSession(userId, userDetails);
+        return (Boolean) response.get("success")
+                ? ResponseEntity.ok(response)
+                : ResponseEntity.badRequest().body(response);
+    } catch (Exception e) {
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("success", false, "message", "Error: " + e.getMessage()));
+    }
+}
     @GetMapping("/health")
     public ResponseEntity<Map<String, Object>> healthCheck() {
         try {
