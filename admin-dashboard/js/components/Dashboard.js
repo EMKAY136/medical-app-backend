@@ -21,7 +21,7 @@ const MedicalAdminDashboard = () => {
     // Support Chat
     const [showSupportChat, setShowSupportChat]       = useState(false);
     const [supportChatPatient, setSupportChatPatient] = useState(null);
-    const [chatUnreadCount, setChatUnreadCount]       = useState(0); // ✅ NEW: unread badge
+    const [chatUnreadCount, setChatUnreadCount]       = useState(0);
 
     const [formData, setFormData] = useState({
         recipientId: '', title: '', message: '', type: 'appointment', sendToAll: false,
@@ -151,7 +151,6 @@ const MedicalAdminDashboard = () => {
                 const list = data.refundRequests || data.data || data.requests || (Array.isArray(data) ? data : []);
                 setRefundRequests(list);
             } else {
-                // Fallback: derive from appointments
                 const refunds = appointments.filter(a =>
                     a.refundRequested === true ||
                     ['REQUESTED', 'APPROVED', 'PENDING'].includes((a.refundStatus || '').toUpperCase()) ||
@@ -160,7 +159,6 @@ const MedicalAdminDashboard = () => {
                 setRefundRequests(refunds);
             }
         } catch (err) {
-            // Fallback: derive from appointments
             const refunds = appointments.filter(a =>
                 a.refundRequested === true ||
                 ['REQUESTED', 'APPROVED', 'PENDING'].includes((a.refundStatus || '').toUpperCase()) ||
@@ -239,7 +237,6 @@ const MedicalAdminDashboard = () => {
         } catch (err) { console.error('Error loading auto-notifications:', err); }
     };
 
-    // ✅ NEW: Poll for unread patient chat messages
     const loadChatUnreadCount = async () => {
         try {
             const token = localStorage.getItem('authToken');
@@ -279,7 +276,6 @@ const MedicalAdminDashboard = () => {
                 (apt.paymentStatus || '').toUpperCase() === 'PENDING_CONFIRMATION'
             ).length;
 
-            // Missed appointments that are paid (need follow-up)
             const missedAppointments = appointments.filter(apt =>
                 (apt.status || '').toUpperCase() === 'MISSED' &&
                 (apt.paymentStatus || '').toUpperCase() === 'PAID'
@@ -501,16 +497,18 @@ const MedicalAdminDashboard = () => {
                             </div>
                         )}
 
-                        {/* Refund requests banner */}
+                        {/* ── REFUND REQUESTS BANNER (non-clickable status only) ── */}
                         {stats.refundRequests > 0 && (
-                            <div style={{ margin: '0 20px 20px', padding: '14px 18px', background: '#fce7f3', border: '2px solid #f472b6', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <div style={{ fontWeight: '700', color: '#9d174d', fontSize: '15px' }}>
-                                    🔄 {stats.refundRequests} refund request{stats.refundRequests > 1 ? 's' : ''} pending review
+                            <div style={{ margin: '0 20px 20px', padding: '14px 18px', background: '#f3e8ff', border: '2px solid #a78bfa', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <div style={{ fontSize: '22px' }}>🔄</div>
+                                <div style={{ flex: 1 }}>
+                                    <div style={{ fontWeight: '700', color: '#5b21b6', fontSize: '15px' }}>
+                                        {stats.refundRequests} refund request{stats.refundRequests > 1 ? 's' : ''} pending review
+                                    </div>
+                                    <div style={{ fontSize: '12px', color: '#7c3aed', marginTop: '2px' }}>
+                                        Go to Appointments → Refund Requests tab to review
+                                    </div>
                                 </div>
-                                <button onClick={() => setCurrentView('appointments')}
-                                    style={{ padding: '8px 18px', background: '#db2777', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>
-                                    Review →
-                                </button>
                             </div>
                         )}
 
@@ -717,7 +715,6 @@ const MedicalAdminDashboard = () => {
                 onClose: () => {
                     setShowSupportChat(false);
                     setSupportChatPatient(null);
-                    // ✅ Clear badge when chat is opened and closed
                     setChatUnreadCount(0);
                 },
                 isAdmin: true,
@@ -725,13 +722,13 @@ const MedicalAdminDashboard = () => {
                 selectedPatient: supportChatPatient,
             })}
 
-            {/* ✅ Floating support button WITH unread badge */}
+            {/* Floating support button WITH unread badge */}
             {!showSupportChat && (
                 <button
                     onClick={() => {
                         setSupportChatPatient(null);
                         setShowSupportChat(true);
-                        setChatUnreadCount(0); // clear badge on open
+                        setChatUnreadCount(0);
                     }}
                     title="Open Patient Support Chat"
                     style={{
@@ -747,7 +744,6 @@ const MedicalAdminDashboard = () => {
                     onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
                 >
                     <i className="fas fa-headset"></i>
-                    {/* ✅ NEW: unread message badge */}
                     {chatUnreadCount > 0 && (
                         <span style={{
                             position: 'absolute',

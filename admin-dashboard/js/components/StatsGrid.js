@@ -24,13 +24,20 @@ const StatsGrid = ({ stats }) => {
             change: stats.reportsGrowth || '+0%',
             icon: 'reports',
         },
-        // ── NEW ──
         {
             title: 'Pending Payments',
             value: stats.pendingPayments || 0,
             change: stats.pendingPayments > 0 ? 'Awaiting confirmation' : 'All clear',
             icon: 'payment',
             alert: (stats.pendingPayments || 0) > 0,
+        },
+        // ── REFUND REQUESTS (non-clickable status) ──
+        {
+            title: 'Refund Requests',
+            value: stats.refundRequests || 0,
+            change: (stats.refundRequests || 0) > 0 ? `${stats.refundRequests} pending` : 'None',
+            icon: 'refund',
+            alert: (stats.refundRequests || 0) > 0,
         },
         {
             title: 'Missed Appointments',
@@ -48,6 +55,7 @@ const StatsGrid = ({ stats }) => {
             tests:       'fa-vial',
             reports:     'fa-chart-bar',
             payment:     'fa-credit-card',
+            refund:      'fa-undo-alt',
             missed:      'fa-calendar-times',
         };
         return map[icon] || 'fa-chart-line';
@@ -55,7 +63,12 @@ const StatsGrid = ({ stats }) => {
 
     const iconColor = (icon, alert) => {
         if (alert) {
-            return { bg: icon === 'payment' ? '#fef3c7' : '#ffedd5', color: icon === 'payment' ? '#d97706' : '#ea580c' };
+            const alertMap = {
+                payment: { bg: '#fef3c7', color: '#d97706' },
+                refund:  { bg: '#f3e8ff', color: '#7c3aed' },
+                missed:  { bg: '#ffedd5', color: '#ea580c' },
+            };
+            return alertMap[icon] || { bg: '#ffedd5', color: '#ea580c' };
         }
         const map = {
             patients:    { bg: '#dbeafe', color: '#1e40af' },
@@ -63,6 +76,7 @@ const StatsGrid = ({ stats }) => {
             tests:       { bg: '#ede9fe', color: '#5b21b6' },
             reports:     { bg: '#fce7f3', color: '#9d174d' },
             payment:     { bg: '#ecfdf5', color: '#065f46' },
+            refund:      { bg: '#f3e8ff', color: '#7c3aed' },
             missed:      { bg: '#f3f4f6', color: '#6b7280' },
         };
         return map[icon] || { bg: '#f3f4f6', color: '#6b7280' };
