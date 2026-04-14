@@ -112,17 +112,11 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/support/faq").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/support/health").permitAll()
 
-                // ── Admin support endpoints ───────────────────────────────
-                // FIX: was duplicated — one rule said .authenticated(), a later
-                // rule said .hasAnyAuthority(...). Spring uses FIRST match only,
-                // so the authority check was silently ignored and the route fell
-                // through to .anyRequest().authenticated() which worked for GET
-                // but caused 404s on POST routes like end-session.
-                // Consolidated into ONE rule here, covering all methods.
-                .requestMatchers(HttpMethod.GET,  "/api/support/admin/**").hasAnyAuthority("ADMIN", "DOCTOR")
-                .requestMatchers(HttpMethod.POST, "/api/support/admin/**").hasAnyAuthority("ADMIN", "DOCTOR")
-                .requestMatchers(HttpMethod.PUT,  "/api/support/admin/**").hasAnyAuthority("ADMIN", "DOCTOR")
-                .requestMatchers(HttpMethod.DELETE, "/api/support/admin/**").hasAnyAuthority("ADMIN", "DOCTOR")
+                // ── Admin support endpoints (FIX: use hasAnyRole to match ROLE_ prefix) ──
+                .requestMatchers(HttpMethod.GET,    "/api/support/admin/**").hasAnyRole("ADMIN", "DOCTOR")
+                .requestMatchers(HttpMethod.POST,   "/api/support/admin/**").hasAnyRole("ADMIN", "DOCTOR")
+                .requestMatchers(HttpMethod.PUT,    "/api/support/admin/**").hasAnyRole("ADMIN", "DOCTOR")
+                .requestMatchers(HttpMethod.DELETE,  "/api/support/admin/**").hasAnyRole("ADMIN", "DOCTOR")
 
                 // ── Patient support endpoints ─────────────────────────────
                 .requestMatchers("/api/support/chat/**").authenticated()
