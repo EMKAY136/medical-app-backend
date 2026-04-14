@@ -342,8 +342,9 @@ public class Appointment {
     }
 
     public enum RefundStatus {
-        NONE, REQUESTED, APPROVED, REJECTED
-    }
+    NONE, REQUESTED, APPROVED, REJECTED, REFUNDED
+}
+
 
     public enum RescheduleStatus {
         NONE, REQUESTED, APPROVED, REJECTED
