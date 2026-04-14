@@ -97,7 +97,15 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                     patientEmail: chat.userEmail,
                     lastMessage: chat.lastMessage || chat.subject || 'New conversation',
                     lastMessageTime: new Date(chat.lastActivity || chat.createdAt),
-                    unreadCount: chat.status === 'NEEDS_RESPONSE' ? 1 : 0,
+                    // Mark as unread if: status says needs response, OR patient explicitly
+                    // requested a human agent (detected from subject/message content)
+                    unreadCount: (
+                        chat.status === 'NEEDS_RESPONSE' ||
+                        chat.status === 'NEEDS_FIRST_RESPONSE' ||
+                        (chat.subject || '').toLowerCase().includes('human support') ||
+                        (chat.subject || '').toLowerCase().includes('human agent') ||
+                        chat.priority === 'HIGH'
+                    ) ? 1 : 0,
                     status: chat.status || 'active',
                     priority: chat.priority,
                     ticketNumber: chat.ticketNumber,
@@ -483,6 +491,24 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                                                 {conv.ticketNumber && (
                                                     <div style={{ fontSize: '10px', color: '#3b82f6', fontWeight: '700', marginBottom: '2px' }}>
                                                         #{conv.ticketNumber}
+                                                    </div>
+                                                )}
+                                                {/* Human agent request badge */}
+                                                {((conv.lastMessage || '').toLowerCase().includes('human') ||
+                                                  (conv.lastMessage || '').toLowerCase().includes('agent') ||
+                                                  conv.priority === 'HIGH') && (
+                                                    <div style={{
+                                                        display: 'inline-block',
+                                                        backgroundColor: '#fef3c7',
+                                                        color: '#92400e',
+                                                        fontSize: '9px',
+                                                        fontWeight: '800',
+                                                        padding: '1px 6px',
+                                                        borderRadius: '4px',
+                                                        marginBottom: '3px',
+                                                        border: '1px solid #fbbf24',
+                                                    }}>
+                                                        🙋 HUMAN AGENT REQUESTED
                                                     </div>
                                                 )}
                                                 <div style={{ fontSize: '11px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

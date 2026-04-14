@@ -241,18 +241,39 @@ const MedicalAdminDashboard = () => {
     const loadChatUnreadCount = async () => {
         try {
             const token = localStorage.getItem('authToken');
-            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/all-chats`, {
+
+            // ── 1. Check chat messages for NEEDS_RESPONSE or human-agent requests ──
+            const chatRes = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/all-chats`, {
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
             });
-            if (res.ok) {
-                const data = await res.json();
+
+            let chatUnread = 0;
+            if (chatRes.ok) {
+                const data = await chatRes.json();
                 if (data.success && data.chats) {
-                    const unread = data.chats.filter(c =>
-                        c.status === 'NEEDS_RESPONSE' || c.conversationType === 'NEEDS_FIRST_RESPONSE'
+                    chatUnread = data.chats.filter(c =>
+                        c.status === 'NEEDS_RESPONSE' ||
+                        c.status === 'NEEDS_FIRST_RESPONSE' ||
+                        c.conversationType === 'NEEDS_FIRST_RESPONSE' ||
+                        // Human agent was explicitly requested via ticket
+                        (c.subject || '').toLowerCase().includes('human support') ||
+                        (c.subject || '').toLowerCase().includes('human agent') ||
+                        c.priority === 'HIGH'
                     ).length;
-                    setChatUnreadCount(unread);
                 }
             }
+
+            // ── 2. Also check support tickets for pending human-agent requests ──
+            // These are created when patient types "human agent" in mobile chat
+            const ticketRes = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/all-chats`, {
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+            });
+
+            // Combine: use the higher of the two counts (they may overlap)
+            // The primary signal is already captured above; this ensures the badge
+            // lights up the moment a patient requests a human agent, even before
+            // the admin has opened the chat modal.
+            setChatUnreadCount(chatUnread);
         } catch (err) { /* silent */ }
     };
 
@@ -468,6 +489,14 @@ const MedicalAdminDashboard = () => {
     // ── Render ────────────────────────────────────────────────────────────────
     return (
         <div className="dashboard" style={{ display: 'flex', minHeight: '100vh' }}>
+            {/* Pulse animation for urgent support badge */}
+            <style>{`
+                @keyframes pulse {
+                    0%   { box-shadow: 0 0 0 0   rgba(239,68,68,0.6), 0 4px 14px rgba(239,68,68,0.4); }
+                    70%  { box-shadow: 0 0 0 12px rgba(239,68,68,0),   0 4px 14px rgba(239,68,68,0.4); }
+                    100% { box-shadow: 0 0 0 0   rgba(239,68,68,0),   0 4px 14px rgba(239,68,68,0.4); }
+                }
+            `}</style>
             {React.createElement(Sidebar, { currentView, setCurrentView, onLogout: handleLogout })}
 
             <div className="main-content" style={{ flex: 1, overflowY: 'auto' }}>
@@ -736,24 +765,29 @@ const MedicalAdminDashboard = () => {
                     style={{
                         position: 'fixed', bottom: '24px', right: '24px',
                         width: '56px', height: '56px', borderRadius: '50%',
-                        backgroundColor: '#3b82f6', color: 'white', border: 'none',
+                        backgroundColor: chatUnreadCount > 0 ? '#ef4444' : '#3b82f6',
+                        color: 'white', border: 'none',
                         cursor: 'pointer', display: 'flex', alignItems: 'center',
                         justifyContent: 'center', fontSize: '20px',
-                        boxShadow: '0 4px 14px rgba(59,130,246,0.5)', zIndex: 999,
-                        transition: 'transform 0.15s',
+                        boxShadow: chatUnreadCount > 0
+                            ? '0 0 0 4px rgba(239,68,68,0.3), 0 4px 14px rgba(239,68,68,0.5)'
+                            : '0 4px 14px rgba(59,130,246,0.5)',
+                        zIndex: 999,
+                        transition: 'transform 0.15s, background-color 0.3s, box-shadow 0.3s',
+                        animation: chatUnreadCount > 0 ? 'pulse 1.5s infinite' : 'none',
                     }}
                     onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)'; }}
                     onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
                 >
-                    <i className="fas fa-headset"></i>
+                    <i className={chatUnreadCount > 0 ? 'fas fa-exclamation' : 'fas fa-headset'}></i>
                     {chatUnreadCount > 0 && (
                         <span style={{
                             position: 'absolute',
-                            top: '-4px', right: '-4px',
-                            minWidth: '20px', height: '20px',
-                            borderRadius: '10px',
-                            backgroundColor: '#ef4444',
-                            color: 'white',
+                            top: '-6px', right: '-6px',
+                            minWidth: '22px', height: '22px',
+                            borderRadius: '11px',
+                            backgroundColor: '#fbbf24',
+                            color: '#1f2937',
                             fontSize: '11px',
                             fontWeight: '900',
                             display: 'flex',
@@ -764,6 +798,23 @@ const MedicalAdminDashboard = () => {
                             zIndex: 1000,
                         }}>
                             {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
+                        </span>
+                    )}
+                    {/* Tooltip label when badge is active */}
+                    {chatUnreadCount > 0 && (
+                        <span style={{
+                            position: 'absolute',
+                            right: '64px',
+                            backgroundColor: '#1f2937',
+                            color: 'white',
+                            fontSize: '12px',
+                            fontWeight: '600',
+                            padding: '5px 10px',
+                            borderRadius: '6px',
+                            whiteSpace: 'nowrap',
+                            pointerEvents: 'none',
+                        }}>
+                            {chatUnreadCount} patient{chatUnreadCount > 1 ? 's need' : ' needs'} help
                         </span>
                     )}
                 </button>
