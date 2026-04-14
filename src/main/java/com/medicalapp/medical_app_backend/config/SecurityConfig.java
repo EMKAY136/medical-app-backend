@@ -88,10 +88,10 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(auth -> auth
 
-                // ✅ OPTIONS preflight — must be first
+                // ── OPTIONS preflight — always first ──────────────────────
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                // ✅ Public auth endpoints
+                // ── Public auth endpoints ─────────────────────────────────
                 .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/signup").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
@@ -99,49 +99,57 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/auth/verify-email-code").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/send-verification-email").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/verify-pre-signup-code").permitAll()
-                .requestMatchers(HttpMethod.GET, "/api/auth/**").permitAll()
+                .requestMatchers(HttpMethod.GET,  "/api/auth/**").permitAll()
 
-                // ✅ Legacy auth paths
+                // ── Legacy auth paths ─────────────────────────────────────
                 .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/signup").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/refresh").permitAll()
-                .requestMatchers(HttpMethod.GET, "/auth/**").permitAll()
+                .requestMatchers(HttpMethod.GET,  "/auth/**").permitAll()
 
-                // ✅ Public support endpoints only
+                // ── Public support endpoints ──────────────────────────────
                 .requestMatchers(HttpMethod.GET, "/api/support/status").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/support/faq").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/support/health").permitAll()
 
-                // 🔒 Admin support endpoints — require authentication
-                .requestMatchers("/api/support/admin/**").authenticated()
+                // ── Admin support endpoints ───────────────────────────────
+                // FIX: was duplicated — one rule said .authenticated(), a later
+                // rule said .hasAnyAuthority(...). Spring uses FIRST match only,
+                // so the authority check was silently ignored and the route fell
+                // through to .anyRequest().authenticated() which worked for GET
+                // but caused 404s on POST routes like end-session.
+                // Consolidated into ONE rule here, covering all methods.
+                .requestMatchers(HttpMethod.GET,  "/api/support/admin/**").hasAnyAuthority("ADMIN", "DOCTOR")
+                .requestMatchers(HttpMethod.POST, "/api/support/admin/**").hasAnyAuthority("ADMIN", "DOCTOR")
+                .requestMatchers(HttpMethod.PUT,  "/api/support/admin/**").hasAnyAuthority("ADMIN", "DOCTOR")
+                .requestMatchers(HttpMethod.DELETE, "/api/support/admin/**").hasAnyAuthority("ADMIN", "DOCTOR")
 
-                // 🔒 Patient support endpoints — require authentication
+                // ── Patient support endpoints ─────────────────────────────
                 .requestMatchers("/api/support/chat/**").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/support/ticket").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/support/chat/send").authenticated()
-                .requestMatchers(HttpMethod.GET, "/api/support/tickets").authenticated()
-                .requestMatchers(HttpMethod.GET, "/api/support/stats").authenticated()
+                .requestMatchers(HttpMethod.GET,  "/api/support/tickets").authenticated()
+                .requestMatchers(HttpMethod.GET,  "/api/support/stats").authenticated()
 
-                // ✅ Other public endpoints
+                // ── Other public endpoints ────────────────────────────────
                 .requestMatchers("/api/health").permitAll()
                 .requestMatchers("/actuator/health/**").permitAll()
                 .requestMatchers("/actuator/info").permitAll()
                 .requestMatchers("/error").permitAll()
                 .requestMatchers("/").permitAll()
 
-                // ✅ WebSocket handshake
+                // ── WebSocket handshake ───────────────────────────────────
                 .requestMatchers("/ws/**").permitAll()
 
-                // 🔒 Protected endpoints
+                // ── Other protected endpoints ─────────────────────────────
                 .requestMatchers("/api/admin/**").authenticated()
                 .requestMatchers("/api/notifications/**").authenticated()
                 .requestMatchers("/api/users/**").authenticated()
                 .requestMatchers("/api/appointments/**").authenticated()
                 .requestMatchers("/api/results/**").authenticated()
-                .requestMatchers("/api/support/admin/**").hasAnyAuthority("ADMIN", "DOCTOR")
                 .requestMatchers("/results/**").authenticated()
 
-                // 🔒 Everything else
+                // ── Everything else requires auth ─────────────────────────
                 .anyRequest().authenticated()
             )
             .exceptionHandling(ex -> ex
