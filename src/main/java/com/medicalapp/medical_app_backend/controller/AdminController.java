@@ -340,6 +340,21 @@ public ResponseEntity<?> getRefundRequests(@AuthenticationPrincipal UserDetails 
         } catch (Exception e) { return error500(e.getMessage()); }
     }
 
+    @PostMapping("/refund-requests/{id}/mark-refunded")
+public ResponseEntity<?> markRefundCompleted(@PathVariable Long id, @AuthenticationPrincipal UserDetails userDetails) {
+    try {
+        if (userDetails == null) return unauth();
+        Optional<Appointment> aptOpt = appointmentRepository.findById(id);
+        if (aptOpt.isEmpty()) return ResponseEntity.badRequest().body(Map.of("success", false, "message", "Not found"));
+        Appointment apt = aptOpt.get();
+        apt.setRefundStatus(Appointment.RefundStatus.REFUNDED);
+        apt.setUpdatedAt(LocalDateTime.now());
+        appointmentRepository.save(apt);
+        return ResponseEntity.ok(Map.of("success", true, "message", "Refund marked as completed"));
+    } catch (Exception e) { return error500(e.getMessage()); }
+}
+
+
     @PostMapping("/refund-requests/{id}/decline")
     public ResponseEntity<?> declineRefundRequest(@PathVariable Long id, @AuthenticationPrincipal UserDetails userDetails) {
         try {
