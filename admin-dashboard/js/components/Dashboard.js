@@ -35,6 +35,7 @@ const MedicalAdminDashboard = () => {
         totalPatients: 0, todayAppointments: 0, pendingTests: 0,
         completedReports: 0, totalNotifications: 0, activeAutoRules: 0,
         pendingPayments: 0, missedAppointments: 0,
+        refundPending: 0, refundApproved: 0, refundCompleted: 0,
     });
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -252,12 +253,28 @@ const MedicalAdminDashboard = () => {
                 (apt.paymentStatus || '').toUpperCase() === 'PAID'
             ).length;
 
+            // Refund request counts
+            const refundPending = appointments.filter(apt =>
+                apt.refundRequested === true ||
+                (apt.refundStatus || '').toUpperCase() === 'REQUESTED' ||
+                (apt.paymentStatus || '').toUpperCase() === 'REFUND_REQUESTED'
+            ).length;
+
+            const refundApproved = appointments.filter(apt =>
+                (apt.refundStatus || '').toUpperCase() === 'APPROVED'
+            ).length;
+
+            const refundCompleted = appointments.filter(apt =>
+                (apt.refundStatus || '').toUpperCase() === 'REFUNDED'
+            ).length;
+
             setStats({
                 totalPatients: patients.length, todayAppointments: todayApts,
                 pendingTests, completedReports,
                 totalNotifications: notifications.length,
                 activeAutoRules: autoNotifications.filter(n => n.enabled).length,
                 pendingPayments, missedAppointments,
+                refundPending, refundApproved, refundCompleted,
             });
         } catch (err) { console.error('Error calculating stats:', err); }
     };
@@ -454,6 +471,33 @@ const MedicalAdminDashboard = () => {
                     <div>
                         {React.createElement(StatsGrid, { stats })}
 
+                        {/* Refund stats row */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', padding: '0 20px', marginBottom: '20px' }}>
+                            <div style={{ background: 'white', border: '2px solid #fde68a', borderRadius: '12px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>💰</div>
+                                <div>
+                                    <div style={{ fontSize: '13px', color: '#6b7280', fontWeight: '600' }}>Refund Requests</div>
+                                    <div style={{ fontSize: '28px', fontWeight: '800', color: '#111827' }}>{stats.refundPending}</div>
+                                    <div style={{ fontSize: '11px', color: '#d97706' }}>{stats.refundPending > 0 ? 'Needs review' : 'None pending'}</div>
+                                </div>
+                            </div>
+                            <div style={{ background: 'white', border: '2px solid #a7f3d0', borderRadius: '12px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#d1fae5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>✅</div>
+                                <div>
+                                    <div style={{ fontSize: '13px', color: '#6b7280', fontWeight: '600' }}>Approved Refunds</div>
+                                    <div style={{ fontSize: '28px', fontWeight: '800', color: '#111827' }}>{stats.refundApproved}</div>
+                                    <div style={{ fontSize: '11px', color: '#059669' }}>{stats.refundApproved > 0 ? 'Awaiting processing' : 'All clear'}</div>
+                                </div>
+                            </div>
+                            <div style={{ background: 'white', border: '2px solid #c4b5fd', borderRadius: '12px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#ede9fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>💸</div>
+                                <div>
+                                    <div style={{ fontSize: '13px', color: '#6b7280', fontWeight: '600' }}>Already Refunded</div>
+                                    <div style={{ fontSize: '28px', fontWeight: '800', color: '#111827' }}>{stats.refundCompleted}</div>
+                                    <div style={{ fontSize: '11px', color: '#7c3aed' }}>Completed</div>
+                                </div>
+                            </div>
+                        </div>
                         {/* Pending payments banner */}
                         {stats.pendingPayments > 0 && (
                             <div style={{ margin: '0 20px 20px', padding: '14px 18px', background: '#fef3c7', border: '2px solid #fbbf24', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -467,7 +511,18 @@ const MedicalAdminDashboard = () => {
                             </div>
                         )}
 
-                        {/* ✅ REMOVED: missed appointments banner — no longer shown on dashboard */}
+                        {/* Refund requests banner */}
+                        {stats.refundPending > 0 && (
+                            <div style={{ margin: '0 20px 20px', padding: '14px 18px', background: '#fce7f3', border: '2px solid #ec4899', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <div style={{ fontWeight: '700', color: '#9d174d', fontSize: '15px' }}>
+                                    💰 {stats.refundPending} refund request{stats.refundPending > 1 ? 's' : ''} pending review
+                                </div>
+                                <button onClick={() => setCurrentView('appointments')}
+                                    style={{ padding: '8px 18px', background: '#db2777', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', fontSize: '14px' }}>
+                                    Review →
+                                </button>
+                            </div>
+                        )}
 
                         <div className="content-grid">
                             {React.createElement(MainPanel, {
