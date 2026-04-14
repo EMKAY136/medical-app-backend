@@ -114,7 +114,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             });
             if (res.ok) {
-                window.showNotificationAlert && window.showNotificationAlert('Refund approved ✅');
+                window.showNotificationAlert && window.showNotificationAlert('Refund approved ✅ — The refund will be processed within 2-3 working days.');
                 loadRefundRequests();
                 onRefresh && onRefresh();
             } else {
@@ -139,6 +139,27 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 loadRefundRequests();
             } else {
                 alert('Failed to decline refund');
+            }
+        } catch (err) { alert('Network error: ' + err.message); }
+        finally { setProcessingRefund(null); }
+    };
+
+    const handleMarkRefunded = async (refund) => {
+        if (!window.confirm(`Mark refund as completed for ${refund.patientName}?`)) return;
+        setProcessingRefund(refund.id);
+        try {
+            const token = localStorage.getItem('authToken');
+            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/refund-requests/${refund.id}/mark-refunded`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            });
+            if (res.ok) {
+                window.showNotificationAlert && window.showNotificationAlert('Refund marked as completed ✅');
+                loadRefundRequests();
+                onRefresh && onRefresh();
+            } else {
+                const d = await res.json().catch(() => ({}));
+                alert(d.message || 'Failed to mark as refunded');
             }
         } catch (err) { alert('Network error: ' + err.message); }
         finally { setProcessingRefund(null); }
@@ -259,6 +280,11 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
             (a.rescheduleStatus || '').toUpperCase() === 'RESCHEDULED'
         )),
         [appointments]
+    );
+
+    const alreadyRefunded = useMemo(() =>
+        refundRequests.filter(r => (r.status || '').toUpperCase() === 'REFUNDED'),
+        [refundRequests]
     );
 
     const counts = useMemo(() => ({
@@ -601,6 +627,7 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                 <SectionPill id="reschedule-requests"  label="📅 Reschedule Requests"   count={rescheduleRequests.length}  alertCount={0} />
                 <SectionPill id="rescheduled"          label="🔁 Rescheduled"           count={rescheduledGroups.length}   alertCount={0} />
                 <SectionPill id="all-appointments"     label="📋 All Appointments"      count={appointments.length}        alertCount={0} />
+                <SectionPill id="already-refunded"    label="✅ Already Refunded"      count={alreadyRefunded.length}     alertCount={0} />
             </div>
 
             {/* ══ SECTION 1 — PENDING PAYMENTS ══ */}
@@ -711,6 +738,55 @@ const AppointmentsView = ({ appointments, setShowModal, onRefresh }) => {
                                         style={{ flex: 1, padding: '7px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '700', fontSize: '12px', opacity: processingRefund === refund.id ? 0.6 : 1 }}>
                                         ✕ Decline
                                     </button>
+                                </div>
+                            )}
+
+                            {(refund.status || '').toUpperCase() === 'APPROVED' && (
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <div style={{ flex: 1, padding: '8px 10px', background: '#fef3c7', border: '1px solid #fbbf24', borderRadius: '6px', fontSize: '11px', color: '#92400e', fontWeight: '600' }}>
+                                        ⏳ Refund will be processed within 2-3 working days
+                                    </div>
+                                    <button onClick={() => handleMarkRefunded(refund)} disabled={processingRefund === refund.id}
+                                        style={{ padding: '7px 14px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '700', fontSize: '12px', opacity: processingRefund === refund.id ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+                                        {processingRefund === refund.id ? '...' : '💸 Mark Refunded'}
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* ══ SECTION — ALREADY REFUNDED ══ */}
+            {activeSection === 'already-refunded' && (
+                <div style={{ padding: '14px 16px' }}>
+                    <SectionBanner icon="✅" title="Already Refunded"
+                        subtitle="Refunds that have been fully processed and completed."
+                        count={alreadyRefunded.length} bg="linear-gradient(135deg,#d1fae5,#a7f3d0)" border="#10b981" countBg="#059669" />
+
+                    {alreadyRefunded.length === 0 ? (
+                        <EmptyState emoji="💰" title="No completed refunds" sub="Refunds marked as completed will appear here" />
+                    ) : alreadyRefunded.map(refund => (
+                        <div key={refund.id} style={{ background: 'white', border: '1.5px solid #6ee7b7', borderRadius: '10px', padding: '14px', marginBottom: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '10px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: 'linear-gradient(135deg,#059669,#065f46)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '700', fontSize: '12px', flexShrink: 0 }}>
+                                        {(refund.patientName || 'U').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                                    </div>
+                                    <div>
+                                        <div style={{ fontWeight: '700', fontSize: '14px', color: '#111827' }}>{refund.patientName || 'Unknown Patient'}</div>
+                                        <div style={{ fontSize: '11px', color: '#6b7280' }}>
+                                            {refund.testType || refund.testName || 'Medical Test'} · {refund.amount || refund.price || '—'}
+                                        </div>
+                                    </div>
+                                </div>
+                                <span style={{ padding: '3px 10px', borderRadius: '10px', fontSize: '11px', fontWeight: '700', background: '#d1fae5', color: '#065f46' }}>
+                                    ✅ REFUNDED
+                                </span>
+                            </div>
+                            {refund.reason && (
+                                <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '8px 10px', fontSize: '12px', color: '#166534' }}>
+                                    <strong>Reason:</strong> {refund.reason}
                                 </div>
                             )}
                         </div>
