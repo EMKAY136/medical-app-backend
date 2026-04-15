@@ -8,6 +8,7 @@ const AdminWebSocket = (() => {
 
     let stompClient        = null;
     let connected          = false;
+    let subscribed         = false;   // ← NEW: prevents double-subscribe
     let reconnectAttempts  = 0;
     let reconnectTimer     = null;
     const MAX_RECONNECTS   = 8;
@@ -38,6 +39,16 @@ const AdminWebSocket = (() => {
         ssSet(CLEARED_IDS_KEY, arr);
     }
 
+    // ── NEW: Remove a userId from the cleared set ────────────────────────────
+    // Called when a new message or ticket arrives from a previously-cleared
+    // patient, indicating they started a fresh session.
+    function removeClearedId(userId) {
+        const uid = Number(userId);
+        const arr = ssGet(CLEARED_IDS_KEY, []).filter(id => Number(id) !== uid);
+        ssSet(CLEARED_IDS_KEY, arr);
+        console.log('[WS] 🔓 Un-cleared userId:', uid, '(new activity detected)');
+    }
+
     // ── Dedup helpers (sessionStorage-backed) ─────────────────────────────────
     function getShownEvents() {
         return new Set(ssGet(SHOWN_EVENTS_KEY, []));
@@ -51,7 +62,6 @@ const AdminWebSocket = (() => {
         const arr = ssGet(SHOWN_EVENTS_KEY, []);
         if (!arr.includes(key)) {
             arr.push(key);
-            // Trim to avoid unbounded growth
             if (arr.length > MAX_DEDUP_ENTRIES) arr.splice(0, arr.length - MAX_DEDUP_ENTRIES);
             ssSet(SHOWN_EVENTS_KEY, arr);
         }
@@ -77,14 +87,13 @@ const AdminWebSocket = (() => {
                     icon:               '/favicon.ico',
                     badge:              '/favicon.ico',
                     requireInteraction: false,
-                    tag:                'qualitest-support',   // collapses duplicate toasts
+                    tag:                'qualitest-support',
                 });
             } catch {}
         }
     }
 
     // ── Handle /topic/admin/new-message ───────────────────────────────────────
-    // Covers NEW_PATIENT_MESSAGE and SESSION_ENDED
     function handleAdminNewMessage(data) {
         const event  = (data.event || '').toUpperCase();
         const userId = Number(data.userId);
@@ -93,51 +102,47 @@ const AdminWebSocket = (() => {
         if (event === 'SESSION_ENDED') {
             console.log('[WS] 🔴 SESSION_ENDED for userId:', userId);
 
-            // Persist as cleared — prevents WS ghost messages after session ends
             addClearedId(userId);
             clearShownEventsForUser(userId);
 
-            // Tell ChatSupportModal and dashboard to drop the row immediately
             window.dispatchEvent(new CustomEvent('patientSessionEnded', {
                 detail: { userId, timestamp: data.timestamp },
             }));
 
-            // Authoritative badge sync — fire loadConversations via dashboard
             window.dispatchEvent(new CustomEvent('requestConversationRefresh'));
             return;
         }
 
         // ── NEW_PATIENT_MESSAGE ──────────────────────────────────────────────
         if (event === 'NEW_PATIENT_MESSAGE') {
-            // Skip cleared patients
+            // FIX v2.1: If this patient was previously cleared (session ended),
+            // un-clear them — a new message means a new session has started.
             if (getClearedIds().has(userId)) {
-                console.log('[WS] ⏭️ Skipping message for cleared userId:', userId);
-                return;
+                removeClearedId(userId);
+                clearShownEventsForUser(userId);
+                console.log('[WS] 💬 Previously-cleared userId', userId,
+                            'sent a new message — un-cleared and will show in sidebar');
             }
 
             console.log('[WS] 💬 New patient message — userId:', userId,
                         '| sender:', data.senderName || data.userName,
                         '| msg:', (data.message || '').substring(0, 60));
 
-            // Fire user-facing callback (ChatSupportModal sidebar refresh)
             if (typeof _onNewPatientMessage === 'function') {
                 _onNewPatientMessage(data);
             }
 
             window.dispatchEvent(new CustomEvent('newPatientChatMessage', { detail: data }));
 
-            // Browser notification
             showBrowserNotification(
                 `💬 ${data.userName || data.senderName || 'Patient'}`,
                 data.message || 'New support message'
             );
 
-            // Badge sync: ask dashboard to re-query DB — NOT increment a counter
             window.dispatchEvent(new CustomEvent('requestConversationRefresh'));
             return;
         }
 
-        // Other events on this topic
         window.dispatchEvent(new CustomEvent('adminChatEvent', { detail: data }));
     }
 
@@ -150,7 +155,7 @@ const AdminWebSocket = (() => {
                     '| ticketId:', data.ticketId,
                     '| userId:', userId);
 
-        // Terminal events — clear dedup so future requests from same user show up
+        // Terminal events
         if (['SESSION_ENDED', 'TICKET_RESOLVED', 'TICKET_CLOSED'].includes(event)) {
             clearShownEventsForUser(userId);
             if (event === 'SESSION_ENDED') addClearedId(userId);
@@ -159,7 +164,7 @@ const AdminWebSocket = (() => {
             return;
         }
 
-        // Dedup key uses ticketId when available (prevents false dedup across users)
+        // Dedup
         const dedupeKey = event + ':' + (data.ticketId || userId || 'unknown');
 
         if (hasShownEvent(dedupeKey)) {
@@ -171,16 +176,18 @@ const AdminWebSocket = (() => {
         window.dispatchEvent(new CustomEvent('supportEvent', { detail: data }));
 
         if (event === 'NEW_TICKET' || event === 'LIVE_AGENT_NEEDED') {
-            // Skip cleared users
-            if (getClearedIds().has(userId)) return;
+            // FIX v2.1: Un-clear the userId — a new ticket means a fresh session
+            if (getClearedIds().has(userId)) {
+                removeClearedId(userId);
+                clearShownEventsForUser(userId);
+                console.log('[WS] 🎫 Un-cleared userId', userId, 'due to new ticket/agent request');
+            }
 
             showBrowserNotification(
                 '🚨 New Support Ticket',
                 `${data.userName || 'A patient'} opened a new support ticket`
             );
 
-            // Badge sync: ask dashboard to re-query DB
-            // NO incrementing of any counter here — badge comes from DB only
             window.dispatchEvent(new CustomEvent('requestConversationRefresh'));
         }
     }
@@ -192,8 +199,40 @@ const AdminWebSocket = (() => {
             notification.message || 'You have a new notification'
         );
         window.dispatchEvent(new CustomEvent('adminNotification', { detail: notification }));
-        // These are non-support events — let dashboard decide what to refresh
         window.dispatchEvent(new CustomEvent('refreshNotifications'));
+    }
+
+    // ── Subscribe to all admin topics ─────────────────────────────────────────
+    // FIX v2.1: Extracted into a named function with a `subscribed` guard so
+    // subscriptions only happen once per connection, preventing the
+    // InvalidStateError that occurred when the callback fired before the
+    // transport was fully ready.
+    function subscribeAll() {
+        if (subscribed || !stompClient || !stompClient.connected) return;
+        subscribed = true;
+
+        stompClient.subscribe('/topic/admin/appointments', (msg) => {
+            try { handleNotification(JSON.parse(msg.body)); } catch {}
+        });
+
+        stompClient.subscribe('/topic/admin/patients', (msg) => {
+            try { handleNotification(JSON.parse(msg.body)); } catch {}
+        });
+
+        stompClient.subscribe('/topic/admin/new-message', (msg) => {
+            try { handleAdminNewMessage(JSON.parse(msg.body)); } catch (e) {
+                console.error('[WS] Parse error on new-message:', e);
+            }
+        });
+
+        stompClient.subscribe('/topic/admin/support', (msg) => {
+            try { handleSupportEvent(JSON.parse(msg.body)); } catch (e) {
+                console.error('[WS] Parse error on support:', e);
+            }
+        });
+
+        console.log('[WS] ✅ Subscribed to all admin topics');
+        window.dispatchEvent(new CustomEvent('websocketConnected'));
     }
 
     // ── Connect ───────────────────────────────────────────────────────────────
@@ -208,7 +247,6 @@ const AdminWebSocket = (() => {
             return;
         }
 
-        // Build URL
         let wsUrl = (CONFIG.WS_URL || CONFIG.API_BASE_URL || '')
             .replace(/^wss:\/\//i, 'https://')
             .replace(/^ws:\/\//i,  'http://');
@@ -224,7 +262,10 @@ const AdminWebSocket = (() => {
         try {
             const socket     = new SockJS(wsUrl);
             stompClient      = Stomp.over(socket);
-            stompClient.debug = () => {};  // silence STOMP frame noise
+            stompClient.debug = () => {};
+
+            // FIX v2.1: Reset subscribed flag before each connection attempt
+            subscribed = false;
 
             stompClient.connect(
                 { Authorization: `Bearer ${token}` },
@@ -236,38 +277,22 @@ const AdminWebSocket = (() => {
                     reconnectAttempts = 0;
                     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
-                    // Appointments
-                    stompClient.subscribe('/topic/admin/appointments', (msg) => {
-                        try { handleNotification(JSON.parse(msg.body)); } catch {}
-                    });
-
-                    // Patients
-                    stompClient.subscribe('/topic/admin/patients', (msg) => {
-                        try { handleNotification(JSON.parse(msg.body)); } catch {}
-                    });
-
-                    // Chat messages + SESSION_ENDED
-                    stompClient.subscribe('/topic/admin/new-message', (msg) => {
-                        try { handleAdminNewMessage(JSON.parse(msg.body)); } catch (e) {
-                            console.error('[WS] Parse error on new-message:', e);
+                    // FIX v2.1: Small delay to ensure SockJS transport is fully
+                    // ready before subscribing — prevents InvalidStateError
+                    setTimeout(() => {
+                        try {
+                            subscribeAll();
+                        } catch (e) {
+                            console.error('[WS] Subscribe error (will retry on reconnect):', e);
                         }
-                    });
-
-                    // Ticket events
-                    stompClient.subscribe('/topic/admin/support', (msg) => {
-                        try { handleSupportEvent(JSON.parse(msg.body)); } catch (e) {
-                            console.error('[WS] Parse error on support:', e);
-                        }
-                    });
-
-                    console.log('[WS] ✅ Subscribed to all admin topics');
-                    window.dispatchEvent(new CustomEvent('websocketConnected'));
+                    }, 100);
                 },
 
                 // ── Error / disconnect ────────────────────────────────────
                 (error) => {
                     console.warn('[WS] ❌ Disconnected:', error);
-                    connected = false;
+                    connected  = false;
+                    subscribed = false;
                     scheduleReconnect();
                 }
             );
@@ -287,6 +312,7 @@ const AdminWebSocket = (() => {
         console.log(`[WS] Retrying in ${delay / 1000}s (attempt ${reconnectAttempts}/${MAX_RECONNECTS})`);
         reconnectTimer = setTimeout(() => {
             stompClient = null;
+            subscribed  = false;
             connect();
         }, delay);
     }
@@ -300,8 +326,9 @@ const AdminWebSocket = (() => {
                 });
             } catch {}
         }
-        connected     = false;
-        stompClient   = null;
+        connected         = false;
+        subscribed        = false;
+        stompClient       = null;
         reconnectAttempts = 0;
     }
 
@@ -312,6 +339,7 @@ const AdminWebSocket = (() => {
         isConnected:    () => connected,
         getClearedIds,
         addClearedId,
+        removeClearedId,   // ← NEW: exposed so ChatSupportModal can also un-clear
 
         registerChatCallbacks({ onNewPatientMessage, onNewAgentMessage } = {}) {
             if (onNewPatientMessage) _onNewPatientMessage = onNewPatientMessage;
@@ -339,7 +367,6 @@ window.addEventListener('userAuthenticated', () => {
 
 window.addEventListener('userLoggedOut', () => AdminWebSocket.disconnect());
 
-// Reconnect on tab visibility — but ONLY if truly disconnected
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden && localStorage.getItem('authToken') && !AdminWebSocket.isConnected()) {
         console.log('[WS] Tab visible — reconnecting...');

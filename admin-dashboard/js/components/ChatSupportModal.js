@@ -1,22 +1,7 @@
-// ChatSupportModal.js — Admin & Patient support chat  v4
-// ───────────────────────────────────────────────────────
-// KEY FIXES vs v3:
-//  1. After loadConversations() finishes, dispatches 'supportConversationsLoaded'
-//     with the authoritative humanRequestCount so the dashboard badge reflects
-//     the DB — not stale WS event counters.
-//  2. Listens to 'requestConversationRefresh' (fired by admin-websocket-v3.js
-//     instead of the old updateNotificationCount) to trigger a silent reload.
-//  3. 'patientSessionEnded' immediately removes the row and dispatches
-//     'supportConversationsLoaded' with the updated count.
-//  4. clearedUserIdsRef is always re-read from sessionStorage on every
-//     loadConversations() call — reload-proof.
-//  5. loadMessagesForUser bails early for cleared users.
-//  6. sendMessage debounce guard prevents double-send on fast clicks.
-//  7. Polling interval backed off to 5 s (was 4 s) to reduce server load.
 
 const { useState, useEffect, useRef } = React;
 
-// ── Cleared-session storage (shared with admin-websocket-v3.js) ──────────────
+// ── Cleared-session storage (shared with admin-websocket-v2.js) ──────────────
 const ClearedSessions = {
     _KEY: 'admin_cleared_chat_sessions',
 
@@ -34,6 +19,15 @@ const ClearedSessions = {
             arr.push(uid);
             try { sessionStorage.setItem(this._KEY, JSON.stringify(arr)); } catch {}
         }
+        return this.load();
+    },
+
+    // NEW v5: Remove a userId from the cleared set
+    remove(userId) {
+        const uid = Number(userId);
+        const arr = JSON.parse(sessionStorage.getItem(this._KEY) || '[]')
+            .filter(id => Number(id) !== uid);
+        try { sessionStorage.setItem(this._KEY, JSON.stringify(arr)); } catch {}
         return this.load();
     },
 
@@ -114,7 +108,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
 
             _removeUserFromUI(uid);
 
-            // Emit updated count (one less human request)
             setConversations(prev => {
                 const next = prev.filter(c => Number(c.userId) !== uid);
                 emitConversationsLoaded(next);
@@ -122,18 +115,25 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             });
         };
 
-        // NEW_PATIENT_MESSAGE: skip cleared users, refresh sidebar + open chat
+        // NEW_PATIENT_MESSAGE: FIX v5 — un-clear the userId first, then refresh
         const onNewMessage = (e) => {
             const uid = Number(e.detail?.userId);
-            if (clearedUserIdsRef.current.has(uid)) return;
+
+            // FIX v5: Un-clear the userId if it was previously cleared —
+            // a new message means a new session has started
+            if (clearedUserIdsRef.current.has(uid)) {
+                console.log('[Chat] Un-clearing userId', uid, '(new message received)');
+                const newSet = ClearedSessions.remove(uid);
+                clearedUserIdsRef.current = newSet;
+            }
+
             loadConversations(true);
             if (activeConvRef.current && Number(activeConvRef.current.userId) === uid) {
                 loadMessagesForUser(uid, true);
             }
         };
 
-        // requestConversationRefresh: fired by admin-websocket when any support
-        // event arrives — triggers a silent reload so the badge stays in sync
+        // requestConversationRefresh
         const onRefreshRequest = () => {
             loadConversations(true);
         };
@@ -192,7 +192,24 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
             if (!data.success || !data.chats) return;
 
             // Re-read cleared set fresh on every load (reload-proof)
-            const cleared = ClearedSessions.load();
+            let cleared = ClearedSessions.load();
+
+            // ── FIX v5: Un-clear any userId that the backend reports as active ──
+            // The backend only returns OPEN + IN_PROGRESS tickets and users with
+            // chat messages. If a userId is in this response, they have a new
+            // active session — remove them from the cleared set.
+            const activeUserIds = new Set(data.chats.map(c => Number(c.userId)));
+            let clearedChanged = false;
+            for (const uid of cleared) {
+                if (activeUserIds.has(uid)) {
+                    console.log('[Chat] Un-clearing userId', uid, '(backend reports active session)');
+                    ClearedSessions.remove(uid);
+                    clearedChanged = true;
+                }
+            }
+            if (clearedChanged) {
+                cleared = ClearedSessions.load();
+            }
             clearedUserIdsRef.current = cleared;
 
             const mapped = data.chats
@@ -218,8 +235,8 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                         ticketId:        chat.ticketId,
                     };
                 })
-                // Strip cleared rows — backend returns OPEN+IN_PROGRESS only,
-                // but this double-guard ensures nothing slips through on reload.
+                // Strip cleared rows — after the un-clear pass above, only truly
+                // ended sessions remain in the cleared set.
                 .filter(c => !cleared.has(c.userId));
 
             // Sort: human requests first, then by recency
@@ -296,8 +313,14 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
 
     const loadMessagesForUser = async (userId, silent) => {
         if (!userId) return;
-        // Never reload messages for a cleared user
-        if (clearedUserIdsRef.current.has(Number(userId))) return;
+
+        // FIX v5: If the admin explicitly loads messages for a cleared user
+        // (e.g. via search → click), un-clear them so messages actually load.
+        if (clearedUserIdsRef.current.has(Number(userId))) {
+            console.log('[Chat] Un-clearing userId', userId, '(admin opened their chat)');
+            const newSet = ClearedSessions.remove(Number(userId));
+            clearedUserIdsRef.current = newSet;
+        }
 
         try {
             if (!silent) setLoading(true);
@@ -392,15 +415,12 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
         setEndingSession(true);
         const uid = Number(userId);
 
-        // Persist cleared + update in-memory ref immediately
         const newSet = ClearedSessions.add(uid);
         clearedUserIdsRef.current = newSet;
         prevHumanIdsRef.current.delete(uid);
 
-        // Remove from UI without waiting for backend
         _removeUserFromUI(uid);
 
-        // Emit updated count immediately
         setConversations(prev => {
             const next = prev.filter(c => Number(c.userId) !== uid);
             emitConversationsLoaded(next);
@@ -496,7 +516,6 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
                         timestamp:  new Date(),
                     }]), 400);
                 }
-                // Refresh messages after short delay
                 const conv = activeConvRef.current;
                 setTimeout(() => {
                     if (isAdmin && conv?.userId) loadMessagesForUser(conv.userId, true);
