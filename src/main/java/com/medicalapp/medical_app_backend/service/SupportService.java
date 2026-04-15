@@ -355,14 +355,13 @@ public class SupportService {
                 List<SupportTicket> openTickets = supportTicketRepository.findByUserAndStatusIn(
                     patient,
                     java.util.Arrays.asList(
-                        SupportTicket.Status.OPEN,
-                        SupportTicket.Status.IN_PROGRESS
+                        SupportTicket.TicketStatus.OPEN,
+                        SupportTicket.TicketStatus.IN_PROGRESS
                     )
                 );
                 for (SupportTicket ticket : openTickets) {
-                    ticket.setStatus(SupportTicket.Status.RESOLVED);
+                    ticket.setStatus(SupportTicket.TicketStatus.RESOLVED);
                     ticket.setResolvedAt(java.time.LocalDateTime.now());
-                    ticket.setResolvedBy(userDetails.getUsername());
                     supportTicketRepository.save(ticket);
                     resolvedTickets++;
                 }
