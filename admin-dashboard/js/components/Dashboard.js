@@ -13,6 +13,9 @@
 //  4. loadRefundRequests() called only once per fastInterval tick (was called
 //     twice — duplicate API call removed).
 //  5. window.showNotificationAlert exposed for ChatSupportModal to call.
+//  6. loadRefundRequests() now only keeps genuinely pending refunds (excludes
+//     APPROVED, COMPLETED, REFUNDED, REJECTED, DECLINED statuses).
+//  7. loadStats() refundRequests count has a secondary safety filter.
 
 const { useState, useEffect } = React;
 
@@ -194,7 +197,31 @@ const MedicalAdminDashboard = () => {
     }, [patients, appointments, testResults, notifications, autoNotifications, refundRequests]);
 
     // ── Data loaders ──────────────────────────────────────────────────────────
+
+    // ── FIX: loadRefundRequests now only keeps genuinely pending refunds ───────
     const loadRefundRequests = async () => {
+        const PROCESSED_STATUSES = ['APPROVED', 'COMPLETED', 'REFUNDED', 'REJECTED', 'DECLINED'];
+
+        const isPending = (r) => {
+            const status = (r.refundStatus || r.status || '').toUpperCase();
+            return !PROCESSED_STATUSES.includes(status) &&
+                (status === 'REQUESTED' || status === 'PENDING' || status === 'PENDING_REVIEW');
+        };
+
+        const isPendingAppointment = (a) => {
+            const refundStatus = (a.refundStatus || '').toUpperCase();
+            const payStatus    = (a.paymentStatus || '').toUpperCase();
+            return (
+                a.refundRequested === true &&
+                !PROCESSED_STATUSES.includes(refundStatus) &&
+                (
+                    refundStatus === 'REQUESTED' ||
+                    refundStatus === 'PENDING'   ||
+                    payStatus    === 'REFUND_REQUESTED'
+                )
+            );
+        };
+
         try {
             const token = localStorage.getItem('authToken');
             const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/refund-requests`, {
@@ -203,21 +230,12 @@ const MedicalAdminDashboard = () => {
             if (res.ok) {
                 const data = await res.json();
                 const list = data.refundRequests || data.data || data.requests || (Array.isArray(data) ? data : []);
-                setRefundRequests(list);
+                setRefundRequests(list.filter(isPending));
             } else {
-                // Derive from appointments as fallback
-                setRefundRequests(appointments.filter(a =>
-                    a.refundRequested === true ||
-                    ['REQUESTED', 'APPROVED', 'PENDING'].includes((a.refundStatus || '').toUpperCase()) ||
-                    (a.paymentStatus || '').toUpperCase() === 'REFUND_REQUESTED'
-                ));
+                setRefundRequests(appointments.filter(isPendingAppointment));
             }
         } catch {
-            setRefundRequests(appointments.filter(a =>
-                a.refundRequested === true ||
-                ['REQUESTED', 'APPROVED', 'PENDING'].includes((a.refundStatus || '').toUpperCase()) ||
-                (a.paymentStatus || '').toUpperCase() === 'REFUND_REQUESTED'
-            ));
+            setRefundRequests(appointments.filter(isPendingAppointment));
         }
     };
 
@@ -386,6 +404,13 @@ const MedicalAdminDashboard = () => {
                 (apt.paymentStatus || '').toUpperCase() === 'PAID'
             ).length;
 
+            // ── FIX: secondary safety filter — only count genuinely pending refunds ──
+            const PROCESSED_STATUSES = ['APPROVED', 'COMPLETED', 'REFUNDED', 'REJECTED', 'DECLINED'];
+            const pendingRefunds = refundRequests.filter(r => {
+                const status = (r.refundStatus || r.status || '').toUpperCase();
+                return !PROCESSED_STATUSES.includes(status);
+            }).length;
+
             setStats({
                 totalPatients:      patients.length,
                 todayAppointments:  todayApts,
@@ -395,7 +420,7 @@ const MedicalAdminDashboard = () => {
                 activeAutoRules:    autoNotifications.filter(n => n.enabled).length,
                 pendingPayments,
                 missedAppointments,
-                refundRequests:     refundRequests.length,
+                refundRequests:     pendingRefunds,
             });
         } catch (err) { console.error('Error calculating stats:', err); }
     };
