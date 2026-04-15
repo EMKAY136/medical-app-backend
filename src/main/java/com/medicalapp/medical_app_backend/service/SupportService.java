@@ -327,77 +327,66 @@ public class SupportService {
     }
 
     // ── Admin ends session — deletes all messages for patient, notifies patient ─
-    public Map<String, Object> adminEndChatSession(Long userId, UserDetails agentDetails) {
-        Map<String, Object> response = new HashMap<>();
+    public Map<String, Object> adminEndChatSession(Long userId, UserDetails userDetails) {
+        Map<String, Object> result = new HashMap<>();
         try {
-            Optional<User> agentOpt = userRepository.findByUsername(agentDetails.getUsername());
-            if (agentOpt.isEmpty()) {
-                response.put("success", false);
-                response.put("message", "Agent not found");
-                return response;
-            }
-
-            User agent = agentOpt.get();
-            if (!hasRole(agent, "SUPPORT_AGENT") && !hasRole(agent, "ADMIN")) {
-                response.put("success", false);
-                response.put("message", "Unauthorized");
-                return response;
-            }
-
+            // ── 1. Locate the patient ────────────────────────────────────
             Optional<User> userOpt = userRepository.findById(userId);
             if (userOpt.isEmpty()) {
-                response.put("success", false);
-                response.put("message", "Patient not found");
-                return response;
+                result.put("success", false);
+                result.put("message", "User not found: " + userId);
+                return result;
             }
-
-            User user = userOpt.get();
-
-            List<ChatMessage> userMessages = chatMessageRepository.findByUserOrderByCreatedAtAsc(user);
-            if (!userMessages.isEmpty()) {
-                chatMessageRepository.deleteAll(userMessages);
-                System.out.println("Admin ended session — deleted " + userMessages.size() + " messages for userId: " + userId);
+            User patient = userOpt.get();
+ 
+            // ── 2. Delete all chat messages for this user ─────────────────
+            List<ChatMessage> messages = chatMessageRepository.findByUserOrderByCreatedAtAsc(patient);
+            int deletedMessages = messages.size();
+            if (deletedMessages > 0) {
+                chatMessageRepository.deleteAll(messages);
             }
-
-            // Notify admin dashboard
+            System.out.println("✅ Deleted " + deletedMessages + " messages for user " + userId);
+ 
+            // ── 3. Resolve / close all open support tickets ───────────────
+            //    SupportTicket.Status values: OPEN, IN_PROGRESS, RESOLVED, CLOSED
+            //    Adjust the status name below to match your actual enum if different.
+            int resolvedTickets = 0;
             try {
-                Map<String, Object> adminEvent = new HashMap<>();
-                adminEvent.put("event", "SESSION_ENDED");
-                adminEvent.put("userId", userId);
-                adminEvent.put("userName", user.getFirstName() + " " + user.getLastName());
-                adminEvent.put("timestamp", LocalDateTime.now().toString());
-                messagingTemplate.convertAndSend("/topic/admin/new-message", adminEvent);
-            } catch (Exception e) {
-                System.err.println("WebSocket admin event failed: " + e.getMessage());
-            }
-
-            // Notify patient so their UI clears
-            try {
-                Map<String, Object> patientEvent = new HashMap<>();
-                patientEvent.put("event", "SESSION_ENDED");
-                patientEvent.put("timestamp", LocalDateTime.now().toString());
-                messagingTemplate.convertAndSendToUser(
-                    userId.toString(),
-                    "/queue/messages",
-                    patientEvent
+                List<SupportTicket> openTickets = supportTicketRepository.findByUserAndStatusIn(
+                    patient,
+                    java.util.Arrays.asList(
+                        SupportTicket.Status.OPEN,
+                        SupportTicket.Status.IN_PROGRESS
+                    )
                 );
-                messagingTemplate.convertAndSendToUser(
-                    userId.toString(),
-                    "/topic/notifications",
-                    patientEvent
-                );
-                System.out.println("✅ SESSION_ENDED pushed to patient userId: " + userId);
-            } catch (Exception e) {
-                System.err.println("WebSocket patient session-end push failed: " + e.getMessage());
+                for (SupportTicket ticket : openTickets) {
+                    ticket.setStatus(SupportTicket.Status.RESOLVED);
+                    ticket.setResolvedAt(java.time.LocalDateTime.now());
+                    ticket.setResolvedBy(userDetails.getUsername());
+                    supportTicketRepository.save(ticket);
+                    resolvedTickets++;
+                }
+                System.out.println("✅ Resolved " + resolvedTickets + " tickets for user " + userId);
+            } catch (Exception ticketEx) {
+                // Non-fatal — messages are already deleted; ticket cleanup is best-effort
+                System.err.println("⚠️ Could not resolve tickets for user " + userId + ": " + ticketEx.getMessage());
             }
-
-            response.put("success", true);
-            response.put("message", "Session ended and chat history cleared");
+ 
+            result.put("success",         true);
+            result.put("message",         "Session ended and cleared successfully");
+            result.put("deletedMessages", deletedMessages);
+            result.put("resolvedTickets", resolvedTickets);
+            result.put("userId",          userId);
+            result.put("clearedBy",       userDetails.getUsername());
+            return result;
+ 
         } catch (Exception e) {
-            response.put("success", false);
-            response.put("message", "Error ending session: " + e.getMessage());
+            System.err.println("❌ adminEndChatSession error for user " + userId + ": " + e.getMessage());
+            e.printStackTrace();
+            result.put("success", false);
+            result.put("message", "Error ending session: " + e.getMessage());
+            return result;
         }
-        return response;
     }
 
     // ── Get all chats (admin) ─────────────────────────────────────────────────

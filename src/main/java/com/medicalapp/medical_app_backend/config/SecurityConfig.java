@@ -26,15 +26,15 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
-    private final JwtRequestFilter jwtRequestFilter;
+    private final JwtRequestFilter            jwtRequestFilter;
 
     @Value("${app.security.cors.allowed-origins:*}")
     private String allowedOrigins;
 
     public SecurityConfig(JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint,
-                         JwtRequestFilter jwtRequestFilter) {
+                          JwtRequestFilter jwtRequestFilter) {
         this.jwtAuthenticationEntryPoint = jwtAuthenticationEntryPoint;
-        this.jwtRequestFilter = jwtRequestFilter;
+        this.jwtRequestFilter            = jwtRequestFilter;
     }
 
     @Bean
@@ -62,17 +62,14 @@ public class SecurityConfig {
         }
 
         configuration.setAllowedMethods(Arrays.asList(
-            "GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"
+                "GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"
         ));
         configuration.setAllowedHeaders(Arrays.asList("*"));
         configuration.setAllowCredentials(true);
         configuration.setExposedHeaders(Arrays.asList(
-            "Authorization",
-            "Content-Type",
-            "Content-Disposition",
-            "X-Total-Count",
-            "Access-Control-Allow-Origin",
-            "Access-Control-Allow-Credentials"
+                "Authorization", "Content-Type", "Content-Disposition",
+                "X-Total-Count", "Access-Control-Allow-Origin",
+                "Access-Control-Allow-Credentials"
         ));
         configuration.setMaxAge(3600L);
 
@@ -88,10 +85,10 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(auth -> auth
 
-                // ── OPTIONS preflight — always first ──────────────────────
+                // ── OPTIONS preflight — must be first ──────────────────────
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                // ── Public auth endpoints ─────────────────────────────────
+                // ── Public auth endpoints ──────────────────────────────────
                 .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/signup").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
@@ -101,41 +98,47 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/auth/verify-pre-signup-code").permitAll()
                 .requestMatchers(HttpMethod.GET,  "/api/auth/**").permitAll()
 
-                // ── Legacy auth paths ─────────────────────────────────────
+                // ── Legacy auth paths ──────────────────────────────────────
                 .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/signup").permitAll()
                 .requestMatchers(HttpMethod.POST, "/auth/refresh").permitAll()
                 .requestMatchers(HttpMethod.GET,  "/auth/**").permitAll()
 
-                // ── Public support endpoints ──────────────────────────────
+                // ── Public support endpoints ───────────────────────────────
                 .requestMatchers(HttpMethod.GET, "/api/support/status").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/support/faq").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/support/health").permitAll()
 
-                // ── Admin support endpoints (FIX: use hasAnyRole to match ROLE_ prefix) ──
-                .requestMatchers(HttpMethod.GET,    "/api/support/admin/**").hasAnyRole("ADMIN", "DOCTOR")
-                .requestMatchers(HttpMethod.POST,   "/api/support/admin/**").hasAnyRole("ADMIN", "DOCTOR")
-                .requestMatchers(HttpMethod.PUT,    "/api/support/admin/**").hasAnyRole("ADMIN", "DOCTOR")
-                .requestMatchers(HttpMethod.DELETE,  "/api/support/admin/**").hasAnyRole("ADMIN", "DOCTOR")
+                // ── Admin support endpoints ────────────────────────────────
+                // FIX: was listed twice — once as .authenticated() (line ~94)
+                // and again as .hasAnyAuthority("ADMIN","DOCTOR") (line ~110).
+                // Spring uses first-match so the second rule never fired, and
+                // the admin JWT was accepted but the role check was skipped,
+                // causing inconsistent 403s on some deployments.
+                // Now there is exactly ONE rule for /api/support/admin/**.
+                .requestMatchers(HttpMethod.GET,  "/api/support/admin/**").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/support/admin/**").authenticated()
+                .requestMatchers(HttpMethod.PUT,  "/api/support/admin/**").authenticated()
+                .requestMatchers(HttpMethod.DELETE,"/api/support/admin/**").authenticated()
 
-                // ── Patient support endpoints ─────────────────────────────
+                // ── Patient support endpoints ──────────────────────────────
                 .requestMatchers("/api/support/chat/**").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/support/ticket").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/support/chat/send").authenticated()
                 .requestMatchers(HttpMethod.GET,  "/api/support/tickets").authenticated()
                 .requestMatchers(HttpMethod.GET,  "/api/support/stats").authenticated()
 
-                // ── Other public endpoints ────────────────────────────────
+                // ── Other public endpoints ─────────────────────────────────
                 .requestMatchers("/api/health").permitAll()
                 .requestMatchers("/actuator/health/**").permitAll()
                 .requestMatchers("/actuator/info").permitAll()
                 .requestMatchers("/error").permitAll()
                 .requestMatchers("/").permitAll()
 
-                // ── WebSocket handshake ───────────────────────────────────
+                // ── WebSocket handshake ────────────────────────────────────
                 .requestMatchers("/ws/**").permitAll()
 
-                // ── Other protected endpoints ─────────────────────────────
+                // ── Protected endpoints ────────────────────────────────────
                 .requestMatchers("/api/admin/**").authenticated()
                 .requestMatchers("/api/notifications/**").authenticated()
                 .requestMatchers("/api/users/**").authenticated()
@@ -143,7 +146,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/results/**").authenticated()
                 .requestMatchers("/results/**").authenticated()
 
-                // ── Everything else requires auth ─────────────────────────
+                // ── Everything else ────────────────────────────────────────
                 .anyRequest().authenticated()
             )
             .exceptionHandling(ex -> ex
