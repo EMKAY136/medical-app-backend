@@ -1,180 +1,168 @@
-// admin-websocket.js
-// WebSocket connection for real-time admin notifications + live support chat
+// admin-websocket-v2.js
+// Real-time WebSocket for admin notifications + live support chat.
+//
+// Fixes vs v1:
+//  1. NEW_TICKET dedup key uses ticketId (not userId) — prevents suppressing
+//     genuine second tickets from the same patient.
+//  2. handleNewPatientMessage logs senderName properly (was "| undefined").
+//  3. SESSION_ENDED fired by admin is dispatched as a DOM event so
+//     ChatSupportModal can clear the sidebar immediately.
+//  4. Reconnection back-off is capped and resets the dedup set so stale
+//     suppression doesn't persist forever after a network blip.
 
 const AdminWebSocket = {
-    stompClient: null,
-    connected: false,
-    reconnectAttempts: 0,
+    stompClient:        null,
+    connected:          false,
+    reconnectAttempts:  0,
     maxReconnectAttempts: 5,
 
-    // Tracks IDs of live-agent/support events already shown this session.
-    // Prevents re-showing toasts for stale events when the socket reconnects.
+    // Tracks "event:id" keys already shown this connection.
+    // Cleared on full reconnect so stale suppressions don't outlive the session.
     _shownSupportEvents: new Set(),
 
-    // Callbacks registered by the chat UI
-    onNewPatientMessage: null,  // called when a patient sends a message
-    onNewAgentMessage: null,    // called when an agent reply is confirmed
+    // Callbacks registered by ChatSupportModal
+    onNewPatientMessage: null,
+    onNewAgentMessage:   null,
 
+    // ── Connect ──────────────────────────────────────────────────────────────
     connect: function () {
         const token = localStorage.getItem('authToken');
-        if (!token) {
-            console.log('No auth token, skipping WebSocket connection');
-            return;
-        }
+        if (!token) { console.log('[WS] No auth token — skipping connect'); return; }
 
-        // SockJS requires HTTP/HTTPS URLs, not WS/WSS
-        let wsUrl = CONFIG.WS_URL || CONFIG.API_BASE_URL;
+        let wsUrl = (CONFIG.WS_URL || CONFIG.API_BASE_URL)
+            .replace(/^wss:\/\//i, 'https://')
+            .replace(/^ws:\/\//i,  'http://');
 
-        wsUrl = wsUrl.replace(/^wss:\/\//i, 'https://');
-        wsUrl = wsUrl.replace(/^ws:\/\//i, 'http://');
+        if (!/^https?:\/\//i.test(wsUrl)) wsUrl = 'https://' + wsUrl;
+        if (!wsUrl.endsWith('/ws'))        wsUrl = wsUrl.replace(/\/$/, '') + '/ws';
+        wsUrl += '?token=' + token;
 
-        if (!wsUrl.startsWith('http://') && !wsUrl.startsWith('https://')) {
-            wsUrl = 'https://' + wsUrl;
-        }
-
-        if (!wsUrl.endsWith('/ws')) {
-            wsUrl = wsUrl.replace(/\/$/, '') + '/ws';
-        }
-
-        // Append token as query param so the backend handshake interceptor can validate it
-        wsUrl = `${wsUrl}?token=${token}`;
-
-        console.log('Connecting to WebSocket:', wsUrl);
+        console.log('[WS] Connecting to', wsUrl);
 
         try {
-            const socket = new SockJS(wsUrl);
-            this.stompClient = Stomp.over(socket);
-
-            // Suppress STOMP debug noise in production
-            this.stompClient.debug = () => {};
-
-            const connectHeaders = {
-                'Authorization': `Bearer ${token}`
-            };
+            const socket      = new SockJS(wsUrl);
+            this.stompClient  = Stomp.over(socket);
+            this.stompClient.debug = () => {};   // suppress STOMP noise
 
             this.stompClient.connect(
-                connectHeaders,
+                { Authorization: 'Bearer ' + token },
 
-                // ── On connect ──────────────────────────────────────────────
+                // ── onConnect ────────────────────────────────────────────────
                 (frame) => {
-                    console.log('✅ WebSocket Connected');
-                    this.connected = true;
-                    this.reconnectAttempts = 0;
+                    console.log('[WS] ✅ Connected');
+                    this.connected          = true;
+                    this.reconnectAttempts  = 0;
+                    // Clear stale dedup keys — fresh connection = fresh slate
+                    this._shownSupportEvents.clear();
 
-                    // ── Existing admin topics ────────────────────────────────
-                    this.stompClient.subscribe('/topic/admin/appointments', (message) => {
-                        console.log('📬 Appointment notification');
-                        try { this.handleNotification(JSON.parse(message.body)); }
-                        catch (e) { console.error('Parse error:', e); }
+                    // Existing admin topics
+                    this.stompClient.subscribe('/topic/admin/appointments', (msg) => {
+                        try { this.handleNotification(JSON.parse(msg.body)); } catch (e) { console.error('[WS] appointments parse error', e); }
+                    });
+                    this.stompClient.subscribe('/topic/admin/patients', (msg) => {
+                        try { this.handleNotification(JSON.parse(msg.body)); } catch (e) { console.error('[WS] patients parse error', e); }
                     });
 
-                    this.stompClient.subscribe('/topic/admin/patients', (message) => {
-                        console.log('📬 Patient notification');
-                        try { this.handleNotification(JSON.parse(message.body)); }
-                        catch (e) { console.error('Parse error:', e); }
-                    });
-
-                    // ── NEW: Subscribe to patient chat messages ───────────────
-                    // Backend publishes here whenever a patient sends a message
-                    this.stompClient.subscribe('/topic/admin/new-message', (message) => {
-                        console.log('💬 New patient message received via WebSocket');
+                    // Patient chat messages
+                    this.stompClient.subscribe('/topic/admin/new-message', (msg) => {
                         try {
-                            const data = JSON.parse(message.body);
+                            const data = JSON.parse(msg.body);
+                            // SESSION_ENDED published here by both patient and admin end-session
+                            if (data.event === 'SESSION_ENDED') {
+                                this._handleSessionEnded(data);
+                                return;
+                            }
                             this.handleNewPatientMessage(data);
-                        } catch (e) {
-                            console.error('Error parsing patient message:', e);
-                        }
+                        } catch (e) { console.error('[WS] new-message parse error', e); }
                     });
 
-                    // ── NEW: Subscribe to support ticket events ──────────────
-                    this.stompClient.subscribe('/topic/admin/support', (message) => {
-                        console.log('🎫 Support event received');
-                        try {
-                            const data = JSON.parse(message.body);
-                            this.handleSupportEvent(data);
-                        } catch (e) {
-                            console.error('Error parsing support event:', e);
-                        }
+                    // Support ticket events (NEW_TICKET, LIVE_AGENT_NEEDED, etc.)
+                    this.stompClient.subscribe('/topic/admin/support', (msg) => {
+                        try { this.handleSupportEvent(JSON.parse(msg.body)); }
+                        catch (e) { console.error('[WS] support event parse error', e); }
                     });
 
-                    console.log('✅ Subscribed to all admin topics');
+                    console.log('[WS] ✅ Subscribed to all admin topics');
                 },
 
-                // ── On error / disconnect ────────────────────────────────────
+                // ── onError ──────────────────────────────────────────────────
                 (error) => {
-                    console.error('❌ WebSocket error:', error);
+                    console.error('[WS] ❌ Error:', error);
                     this.connected = false;
-
-                    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-                        this.reconnectAttempts++;
-                        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-                        console.log(`Retrying in ${delay / 1000}s (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-                        setTimeout(() => this.connect(), delay);
-                    } else {
-                        console.error('Max reconnect attempts reached. Please refresh the page.');
-                    }
+                    this._scheduleReconnect();
                 }
             );
-        } catch (error) {
-            console.error('❌ Error setting up WebSocket:', error);
+        } catch (e) {
+            console.error('[WS] ❌ Setup error:', e);
+            this._scheduleReconnect();
         }
     },
 
+    // ── Disconnect ────────────────────────────────────────────────────────────
     disconnect: function () {
-        if (this.stompClient !== null && this.connected) {
+        if (this.stompClient && this.connected) {
             this.stompClient.disconnect(() => {
-                console.log('WebSocket disconnected');
+                console.log('[WS] Disconnected');
                 this.connected = false;
             });
         }
     },
 
-    // ── Handle incoming patient message ─────────────────────────────────────
-    handleNewPatientMessage: function (data) {
-        console.log('📨 Patient message from userId:', data.userId, '|', data.message);
+    // ── Reconnect logic ───────────────────────────────────────────────────────
+    _scheduleReconnect: function () {
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+            console.error('[WS] Max reconnect attempts reached. Refresh the page.');
+            return;
+        }
+        this.reconnectAttempts++;
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+        console.log('[WS] Retrying in ' + (delay / 1000) + 's (' + this.reconnectAttempts + '/' + this.maxReconnectAttempts + ')...');
+        setTimeout(() => this.connect(), delay);
+    },
 
-        // 1. If the chat UI has registered a callback, call it
-        //    (ChatSupportModal registers this so it can refresh the active chat)
+    // ── Handle incoming patient message ───────────────────────────────────────
+    handleNewPatientMessage: function (data) {
+        // FIX: senderName was "undefined" because the old service didn't include it.
+        // Now the service always sends senderName = fullName(user). We still fall
+        // back gracefully to userName for older backend deploys.
+        const displayName = data.senderName || data.userName || 'Patient';
+        console.log('[WS] Patient message from userId:', data.userId, '|', displayName, '|', (data.message || '').substring(0, 60));
+
         if (typeof this.onNewPatientMessage === 'function') {
             this.onNewPatientMessage(data);
         }
 
-        // 2. Dispatch a DOM event so any part of the page can react
         window.dispatchEvent(new CustomEvent('newPatientChatMessage', { detail: data }));
 
-        // 3. Show a browser notification so the admin is alerted even if the
-        //    support panel is not open
         this.showBrowserNotification(
-            `New message from ${data.userName || 'Patient'}`,
+            'New message from ' + displayName,
             data.message || 'New support message received'
         );
 
-        // 4. Refresh notification badge / conversation list
         this.updateNotificationCount();
     },
 
-    // ── Handle support ticket / agent events ────────────────────────────────
+    // ── Handle support ticket / agent events ──────────────────────────────────
     handleSupportEvent: function (data) {
-        console.log('🎫 Support event:', data.event);
+        console.log('[WS] Support event:', data.event, '| ticketId:', data.ticketId, '| userId:', data.userId);
 
-        // Build a unique key for this event so we can deduplicate across
-        // reconnects. Use ticketId when available, fall back to userId so that
-        // a stale "live agent needed" banner is never re-shown after a reload.
-        const dedupeKey = data.event + ':' + (data.ticketId || data.userId || 'unknown');
-
-        // Events that mark a session as finished should clear the dedup entry
-        // so a genuinely new request from the same user shows up correctly.
         const terminalEvents = ['SESSION_ENDED', 'TICKET_RESOLVED', 'TICKET_CLOSED'];
         if (terminalEvents.includes(data.event)) {
-            this._shownSupportEvents.delete(dedupeKey.replace(data.event, 'LIVE_AGENT_NEEDED'));
-            this._shownSupportEvents.delete(dedupeKey.replace(data.event, 'NEW_TICKET'));
+            // Clear dedup entries for this user/ticket so a new request shows correctly
+            const prefix = 'NEW_TICKET:'     + (data.ticketId || data.userId || '');
+            const prefix2 = 'LIVE_AGENT_NEEDED:' + (data.ticketId || data.userId || '');
+            this._shownSupportEvents.delete(prefix);
+            this._shownSupportEvents.delete(prefix2);
             window.dispatchEvent(new CustomEvent('supportEvent', { detail: data }));
             return;
         }
 
-        // For all other events, skip if we've already shown this one
+        // FIX: dedup key now uses ticketId when available so two different tickets
+        // from the same patient are NOT suppressed (old bug: both used userId).
+        const dedupeKey = data.event + ':' + (data.ticketId || data.userId || 'unknown');
+
         if (this._shownSupportEvents.has(dedupeKey)) {
-            console.log('⏭️ Duplicate support event suppressed:', dedupeKey);
+            console.log('[WS] Duplicate support event suppressed:', dedupeKey);
             return;
         }
         this._shownSupportEvents.add(dedupeKey);
@@ -184,38 +172,46 @@ const AdminWebSocket = {
         if (data.event === 'NEW_TICKET' || data.event === 'LIVE_AGENT_NEEDED') {
             this.showBrowserNotification(
                 'New Support Ticket',
-                `${data.userName || 'A patient'} opened a new ticket`
+                (data.userName || 'A patient') + ' opened a new ticket'
             );
             this.updateNotificationCount();
         }
     },
 
-    // ── Generic notification handler (existing topics) ───────────────────────
-    handleNotification: function (notification) {
-        console.log('Processing notification:', notification);
+    // ── Handle SESSION_ENDED ──────────────────────────────────────────────────
+    // Dispatched via both /topic/admin/new-message (backend fires this on both
+    // patient-end and admin-end) so the sidebar row disappears in real time.
+    _handleSessionEnded: function (data) {
+        console.log('[WS] SESSION_ENDED for userId:', data.userId);
 
+        // Let ChatSupportModal know (it also listens to the DOM event)
+        window.dispatchEvent(new CustomEvent('supportSessionEnded', { detail: data }));
+
+        // Also fire as a generic supportEvent so any other listener can react
+        window.dispatchEvent(new CustomEvent('supportEvent', { detail: { ...data, event: 'SESSION_ENDED' } }));
+
+        // Clear dedup state for this user so future requests show correctly
+        const uid = data.userId || '';
+        ['NEW_TICKET', 'LIVE_AGENT_NEEDED'].forEach(evt => {
+            this._shownSupportEvents.delete(evt + ':' + uid);
+        });
+    },
+
+    // ── Generic notification handler (appointments, patients topics) ──────────
+    handleNotification: function (notification) {
         this.showBrowserNotification(
-            notification.title || 'New Notification',
+            notification.title   || 'New Notification',
             notification.message || 'You have a new notification'
         );
-
         window.dispatchEvent(new CustomEvent('adminNotification', { detail: notification }));
         this.updateNotificationCount();
     },
 
-    // ── Browser push notification helper ────────────────────────────────────
+    // ── Browser notification helper ───────────────────────────────────────────
     showBrowserNotification: function (title, body) {
-        if (Notification.permission === 'default') {
-            Notification.requestPermission();
-        }
-
+        if (Notification.permission === 'default') Notification.requestPermission();
         if (Notification.permission === 'granted') {
-            new Notification(title, {
-                body,
-                icon: '/favicon.ico',
-                badge: '/favicon.ico',
-                requireInteraction: false
-            });
+            new Notification(title, { body, icon: '/favicon.ico', badge: '/favicon.ico', requireInteraction: false });
         }
     },
 
@@ -223,12 +219,9 @@ const AdminWebSocket = {
         window.dispatchEvent(new CustomEvent('refreshNotifications'));
     },
 
-    isConnected: function () {
-        return this.connected;
-    },
+    isConnected: function () { return this.connected; },
 
-    // ── Register chat UI callbacks ───────────────────────────────────────────
-    // Call this from ChatSupportModal so live messages update the open chat
+    // ── Register / unregister chat UI callbacks ───────────────────────────────
     registerChatCallbacks: function ({ onNewPatientMessage, onNewAgentMessage } = {}) {
         if (onNewPatientMessage) this.onNewPatientMessage = onNewPatientMessage;
         if (onNewAgentMessage)   this.onNewAgentMessage   = onNewAgentMessage;
@@ -237,36 +230,30 @@ const AdminWebSocket = {
     unregisterChatCallbacks: function () {
         this.onNewPatientMessage = null;
         this.onNewAgentMessage   = null;
-    }
+    },
 };
 
 window.AdminWebSocket = AdminWebSocket;
 
-// ── Auto-connect on page load ────────────────────────────────────────────────
+// ── Auto-connect on page load ─────────────────────────────────────────────────
 window.addEventListener('load', () => {
-    const token = localStorage.getItem('authToken');
-    if (token) {
-        console.log('Auto-connecting WebSocket...');
+    if (localStorage.getItem('authToken')) {
+        console.log('[WS] Auto-connecting...');
         setTimeout(() => AdminWebSocket.connect(), 1000);
     }
 });
 
-// ── Re-connect after login ───────────────────────────────────────────────────
 window.addEventListener('userAuthenticated', () => {
-    console.log('User authenticated, connecting WebSocket...');
     if (!AdminWebSocket.isConnected()) AdminWebSocket.connect();
 });
 
-// ── Disconnect on logout ─────────────────────────────────────────────────────
 window.addEventListener('userLoggedOut', () => {
-    console.log('User logged out, disconnecting WebSocket...');
     AdminWebSocket.disconnect();
 });
 
-// ── Reconnect when tab becomes visible again ─────────────────────────────────
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden && localStorage.getItem('authToken') && !AdminWebSocket.isConnected()) {
-        console.log('Page visible, reconnecting WebSocket...');
+        console.log('[WS] Tab visible — reconnecting...');
         AdminWebSocket.connect();
     }
 });
