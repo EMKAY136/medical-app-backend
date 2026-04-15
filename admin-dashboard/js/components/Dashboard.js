@@ -1,3 +1,19 @@
+// MedicalAdminDashboard — v4
+// ───────────────────────────────────────────────────────────────────────────
+// KEY FIXES vs previous:
+//  1. chatUnreadCount is ONLY set by:
+//       a. loadChatUnreadCount() which queries the DB directly, OR
+//       b. 'supportConversationsLoaded' CustomEvent from ChatSupportModal
+//          (emitted after every loadConversations() call with the real count)
+//     It is NEVER incremented by WS events. This kills phantom badge counts.
+//  2. 'requestConversationRefresh' listener calls loadChatUnreadCount() so
+//     the badge updates within ~1 s of any WS support event.
+//  3. Clicking the chat button NO LONGER resets chatUnreadCount to 0 eagerly —
+//     it lets the modal's first loadConversations() emit the real count.
+//  4. loadRefundRequests() called only once per fastInterval tick (was called
+//     twice — duplicate API call removed).
+//  5. window.showNotificationAlert exposed for ChatSupportModal to call.
+
 const { useState, useEffect } = React;
 
 const MedicalAdminDashboard = () => {
@@ -21,6 +37,7 @@ const MedicalAdminDashboard = () => {
     // Support Chat
     const [showSupportChat, setShowSupportChat]       = useState(false);
     const [supportChatPatient, setSupportChatPatient] = useState(null);
+    // chatUnreadCount = authoritative "human requests needing attention" count from DB
     const [chatUnreadCount, setChatUnreadCount]       = useState(0);
 
     const [formData, setFormData] = useState({
@@ -39,7 +56,7 @@ const MedicalAdminDashboard = () => {
         pendingPayments: 0, missedAppointments: 0, refundRequests: 0,
     });
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
     const showNotificationAlert = (message, type = 'success') => {
         setNotification({ message, type });
         setTimeout(() => setNotification(null), 4000);
@@ -62,7 +79,7 @@ const MedicalAdminDashboard = () => {
         return isNaN(d.getTime()) ? null : d;
     };
 
-    // ── Token validation ─────────────────────────────────────────────────────
+    // ── Token validation ──────────────────────────────────────────────────────
     const validateTokenAndLoad = async (token) => {
         try {
             const res = await fetch(
@@ -88,28 +105,53 @@ const MedicalAdminDashboard = () => {
     useEffect(() => {
         const token = localStorage.getItem('authToken');
         if (token) validateTokenAndLoad(token);
-        else setValidatingToken(false);
+        else       setValidatingToken(false);
     }, []);
+
+    // ── Badge sync listeners ──────────────────────────────────────────────────
+    // These are the ONLY two ways chatUnreadCount is ever set:
+    //   1. 'supportConversationsLoaded' — authoritative count from ChatSupportModal
+    //   2. loadChatUnreadCount()        — direct DB query
+    useEffect(() => {
+        if (!isAuthenticated) return;
+
+        // ChatSupportModal emits this after every loadConversations()
+        const onConversationsLoaded = (e) => {
+            const count = e.detail?.humanRequestCount ?? 0;
+            setChatUnreadCount(count);
+        };
+
+        // admin-websocket-v3.js emits this instead of updateNotificationCount()
+        // → triggers a DB refresh so the badge reflects reality within ~1 s
+        const onRefreshRequest = () => {
+            loadChatUnreadCount();
+        };
+
+        window.addEventListener('supportConversationsLoaded', onConversationsLoaded);
+        window.addEventListener('requestConversationRefresh', onRefreshRequest);
+
+        return () => {
+            window.removeEventListener('supportConversationsLoaded', onConversationsLoaded);
+            window.removeEventListener('requestConversationRefresh', onRefreshRequest);
+        };
+    }, [isAuthenticated]);
 
     // ── Auto-refresh intervals ────────────────────────────────────────────────
     useEffect(() => {
         if (!isAuthenticated) return;
 
         const fastInterval = setInterval(() => {
-            if (localStorage.getItem('authToken')) {
-                loadAppointments();
-                loadNotifications();
-                loadChatUnreadCount();
-                loadRefundRequests();
-                loadRefundRequests();
-            }
+            if (!localStorage.getItem('authToken')) return;
+            loadAppointments();
+            loadNotifications();
+            loadChatUnreadCount();   // authoritative badge update every 10 s
+            loadRefundRequests();    // called once per tick (was duplicated)
         }, 10000);
 
         const slowInterval = setInterval(() => {
-            if (localStorage.getItem('authToken')) {
-                loadPatients();
-                loadTestResults();
-            }
+            if (!localStorage.getItem('authToken')) return;
+            loadPatients();
+            loadTestResults();
         }, 60000);
 
         return () => {
@@ -120,52 +162,62 @@ const MedicalAdminDashboard = () => {
 
     // ── WebSocket ─────────────────────────────────────────────────────────────
     useEffect(() => {
-        if (isAuthenticated && window.AdminWebSocketClient) {
+        if (!isAuthenticated) return;
+
+        // Expose helpers for ChatSupportModal and admin-websocket
+        window.loadAppointments      = loadAppointments;
+        window.loadPatients          = loadPatients;
+        window.loadTestResults       = loadTestResults;
+        window.loadStats             = loadStats;
+        window.showNotificationAlert = showNotificationAlert;
+
+        if (window.AdminWebSocketClient) {
             const wsClient = new window.AdminWebSocketClient();
             wsClient.connect();
-            window.loadAppointments      = loadAppointments;
-            window.loadPatients          = loadPatients;
-            window.loadTestResults       = loadTestResults;
-            window.loadStats             = loadStats;
-            window.showNotificationAlert = showNotificationAlert;
             return () => {
                 wsClient.disconnect();
                 ['loadAppointments','loadPatients','loadTestResults','loadStats','showNotificationAlert']
                     .forEach(k => delete window[k]);
             };
+        } else if (window.AdminWebSocket && !window.AdminWebSocket.isConnected()) {
+            window.AdminWebSocket.connect();
         }
+
+        return () => {
+            ['loadAppointments','loadPatients','loadTestResults','loadStats','showNotificationAlert']
+                .forEach(k => delete window[k]);
+        };
     }, [isAuthenticated]);
 
     useEffect(() => {
         if (patients.length > 0 || appointments.length > 0 || testResults.length > 0) loadStats();
     }, [patients, appointments, testResults, notifications, autoNotifications, refundRequests]);
 
-    // ── Data loaders ─────────────────────────────────────────────────────────
+    // ── Data loaders ──────────────────────────────────────────────────────────
     const loadRefundRequests = async () => {
         try {
             const token = localStorage.getItem('authToken');
             const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/refund-requests`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             });
             if (res.ok) {
                 const data = await res.json();
                 const list = data.refundRequests || data.data || data.requests || (Array.isArray(data) ? data : []);
                 setRefundRequests(list);
             } else {
-                const refunds = appointments.filter(a =>
+                // Derive from appointments as fallback
+                setRefundRequests(appointments.filter(a =>
                     a.refundRequested === true ||
                     ['REQUESTED', 'APPROVED', 'PENDING'].includes((a.refundStatus || '').toUpperCase()) ||
                     (a.paymentStatus || '').toUpperCase() === 'REFUND_REQUESTED'
-                );
-                setRefundRequests(refunds);
+                ));
             }
-        } catch (err) {
-            const refunds = appointments.filter(a =>
+        } catch {
+            setRefundRequests(appointments.filter(a =>
                 a.refundRequested === true ||
                 ['REQUESTED', 'APPROVED', 'PENDING'].includes((a.refundStatus || '').toUpperCase()) ||
                 (a.paymentStatus || '').toUpperCase() === 'REFUND_REQUESTED'
-            );
-            setRefundRequests(refunds);
+            ));
         }
     };
 
@@ -178,7 +230,7 @@ const MedicalAdminDashboard = () => {
                 loadNotifications(), loadAutoNotifications(),
                 loadChatUnreadCount(), loadRefundRequests(),
             ]);
-        } catch (err) {
+        } catch {
             showNotificationAlert('Error loading dashboard data', 'error');
         } finally {
             setLoading(false);
@@ -189,7 +241,7 @@ const MedicalAdminDashboard = () => {
         try {
             const token = localStorage.getItem('authToken');
             const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/patients?page=0&size=100`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             });
             if (res.status === 401) { handleLogout(); return; }
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -202,7 +254,7 @@ const MedicalAdminDashboard = () => {
         try {
             const token = localStorage.getItem('authToken');
             const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/appointments?page=0&size=200`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             });
             if (res.status === 401) { handleLogout(); return; }
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -222,7 +274,7 @@ const MedicalAdminDashboard = () => {
         try {
             const token = localStorage.getItem('authToken');
             const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/notifications`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             });
             if (res.ok) { const data = await res.json(); setNotifications(data.notifications || []); }
         } catch (err) { console.error('Error loading notifications:', err); }
@@ -232,49 +284,50 @@ const MedicalAdminDashboard = () => {
         try {
             const token = localStorage.getItem('authToken');
             const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             });
             if (res.ok) { const data = await res.json(); setAutoNotifications(data.autoNotifications || []); }
         } catch (err) { console.error('Error loading auto-notifications:', err); }
     };
 
+    // ── loadChatUnreadCount — THE single source of truth for the badge ────────
+    // Queries the DB directly. Badge = number of chats where a human agent
+    // was explicitly requested and admin hasn't cleared yet.
     const loadChatUnreadCount = async () => {
         try {
             const token = localStorage.getItem('authToken');
-
-            // ── 1. Check chat messages for NEEDS_RESPONSE or human-agent requests ──
-            const chatRes = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/all-chats`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+            const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/all-chats`, {
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data.success || !data.chats) return;
 
-            let chatUnread = 0;
-            if (chatRes.ok) {
-                const data = await chatRes.json();
-                if (data.success && data.chats) {
-                    chatUnread = data.chats.filter(c =>
-                        c.status === 'NEEDS_RESPONSE' ||
-                        c.status === 'NEEDS_FIRST_RESPONSE' ||
-                        c.conversationType === 'NEEDS_FIRST_RESPONSE' ||
-                        // Human agent was explicitly requested via ticket
-                        (c.subject || '').toLowerCase().includes('human support') ||
-                        (c.subject || '').toLowerCase().includes('human agent') ||
-                        c.priority === 'HIGH'
-                    ).length;
-                }
-            }
+            // Read cleared IDs so we don't count sessions the admin already ended
+            let clearedIds = new Set();
+            try {
+                const raw = sessionStorage.getItem('admin_cleared_chat_sessions');
+                clearedIds = raw ? new Set(JSON.parse(raw).map(Number)) : new Set();
+            } catch {}
 
-            // ── 2. Also check support tickets for pending human-agent requests ──
-            // These are created when patient types "human agent" in mobile chat
-            const ticketRes = await fetch(`${CONFIG.ADMIN_API_URL}/api/support/admin/all-chats`, {
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-            });
+            const count = data.chats.filter(c => {
+                if (clearedIds.has(Number(c.userId))) return false;
+                const subj = (c.subject  || '').toLowerCase();
+                const cat  = (c.category || '').toLowerCase();
+                return (
+                    c.status === 'NEEDS_RESPONSE'        ||
+                    c.status === 'NEEDS_FIRST_RESPONSE'  ||
+                    c.conversationType === 'NEEDS_FIRST_RESPONSE' ||
+                    subj.includes('human support')       ||
+                    subj.includes('human agent')         ||
+                    cat.includes('human support')        ||
+                    cat.includes('human agent')          ||
+                    c.priority === 'HIGH'
+                );
+            }).length;
 
-            // Combine: use the higher of the two counts (they may overlap)
-            // The primary signal is already captured above; this ensures the badge
-            // lights up the moment a patient requests a human agent, even before
-            // the admin has opened the chat modal.
-            setChatUnreadCount(chatUnread);
-        } catch (err) { /* silent */ }
+            setChatUnreadCount(count);
+        } catch { /* silent — badge simply won't update this tick */ }
     };
 
     const loadStats = () => {
@@ -304,17 +357,20 @@ const MedicalAdminDashboard = () => {
             ).length;
 
             setStats({
-                totalPatients: patients.length, todayAppointments: todayApts,
-                pendingTests, completedReports,
+                totalPatients:      patients.length,
+                todayAppointments:  todayApts,
+                pendingTests,
+                completedReports,
                 totalNotifications: notifications.length,
-                activeAutoRules: autoNotifications.filter(n => n.enabled).length,
-                pendingPayments, missedAppointments,
-                refundRequests: refundRequests.length,
+                activeAutoRules:    autoNotifications.filter(n => n.enabled).length,
+                pendingPayments,
+                missedAppointments,
+                refundRequests:     refundRequests.length,
             });
         } catch (err) { console.error('Error calculating stats:', err); }
     };
 
-    // ── Actions ──────────────────────────────────────────────────────────────
+    // ── Actions ───────────────────────────────────────────────────────────────
     const handleLoginSuccess = () => { setIsAuthenticated(true); loadDashboardData(); };
 
     const handleLogout = () => {
@@ -324,6 +380,7 @@ const MedicalAdminDashboard = () => {
         setPatients([]); setAppointments([]); setTestResults([]);
         setNotifications([]); setAutoNotifications([]);
         setChatUnreadCount(0);
+        window.dispatchEvent(new CustomEvent('userLoggedOut'));
     };
 
     const handleUpdateAppointment = async (appointmentId, newStatus) => {
@@ -336,7 +393,7 @@ const MedicalAdminDashboard = () => {
                 const err = await res.json();
                 showNotificationAlert(err.message || 'Error updating appointment', 'error');
             }
-        } catch (err) { showNotificationAlert('Network error while updating appointment', 'error'); }
+        } catch { showNotificationAlert('Network error while updating appointment', 'error'); }
     };
 
     const handleAddResult = async (resultData) => {
@@ -345,25 +402,25 @@ const MedicalAdminDashboard = () => {
             let response;
             if (hasFiles) {
                 const fd = new FormData();
-                fd.append('patientId', resultData.patientId);
-                fd.append('testType', resultData.testType);
-                fd.append('result', resultData.result || '');
-                fd.append('notes', resultData.notes || '');
-                fd.append('category', resultData.category || 'General');
-                fd.append('status', resultData.status || 'COMPLETED');
-                fd.append('doctorName', resultData.doctorName || 'Admin');
-                fd.append('testDate', resultData.testDate || new Date().toISOString());
+                fd.append('patientId',    resultData.patientId);
+                fd.append('testType',     resultData.testType);
+                fd.append('result',       resultData.result || '');
+                fd.append('notes',        resultData.notes  || '');
+                fd.append('category',     resultData.category || 'General');
+                fd.append('status',       resultData.status   || 'COMPLETED');
+                fd.append('doctorName',   resultData.doctorName || 'Admin');
+                fd.append('testDate',     resultData.testDate   || new Date().toISOString());
                 if (resultData.appointmentId) fd.append('appointmentId', resultData.appointmentId);
                 fd.append('markCompleted', resultData.markAppointmentCompleted || false);
-                const att = resultData.attachments[0];
-                const b64 = att.data.split(',')[1];
+                const att   = resultData.attachments[0];
+                const b64   = att.data.split(',')[1];
                 const bytes = atob(b64);
-                const arr = new Uint8Array(bytes.length);
+                const arr   = new Uint8Array(bytes.length);
                 for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
                 fd.append('file', new File([new Blob([arr], { type: att.type })], att.name, { type: att.type }));
-                const token = localStorage.getItem('authToken');
+                const token    = localStorage.getItem('authToken');
                 const fetchRes = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/upload-result-with-file`, {
-                    method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd
+                    method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
                 });
                 if (!fetchRes.ok) throw new Error(`Server returned ${fetchRes.status}`);
                 response = await fetchRes.json();
@@ -374,7 +431,9 @@ const MedicalAdminDashboard = () => {
                 showNotificationAlert('Test result added successfully!');
                 setShowModal(null);
                 await loadTestResults();
-            } else { showNotificationAlert(response.message || 'Failed to add result', 'error'); }
+            } else {
+                showNotificationAlert(response.message || 'Failed to add result', 'error');
+            }
         } catch (err) { showNotificationAlert('Error: ' + err.message, 'error'); }
     };
 
@@ -383,26 +442,28 @@ const MedicalAdminDashboard = () => {
         if (!formData.sendToAll && !formData.recipientId) { showNotificationAlert('Select a patient or "Send to All"', 'error'); return; }
         setLoading(true);
         try {
-            const token = localStorage.getItem('authToken');
+            const token    = localStorage.getItem('authToken');
             const endpoint = formData.sendToAll
                 ? `${CONFIG.ADMIN_API_URL}/api/admin/notifications/send-all`
                 : `${CONFIG.ADMIN_API_URL}/api/admin/notifications/send`;
-            const payload = formData.sendToAll
+            const payload  = formData.sendToAll
                 ? { title: formData.title, message: formData.message, type: formData.type }
                 : { recipientId: parseInt(formData.recipientId), title: formData.title, message: formData.message, type: formData.type };
             const res = await fetch(endpoint, {
-                method: 'POST',
+                method:  'POST',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
+                body:    JSON.stringify(payload),
             });
             if (res.ok) {
                 showNotificationAlert('Notification sent!');
                 setFormData({ recipientId: '', title: '', message: '', type: 'appointment', sendToAll: false });
                 setShowNotificationForm(false);
                 loadNotifications();
-            } else { showNotificationAlert('Failed to send notification', 'error'); }
-        } catch (err) { showNotificationAlert('Error sending notification', 'error'); }
-        finally { setLoading(false); }
+            } else {
+                showNotificationAlert('Failed to send notification', 'error');
+            }
+        } catch { showNotificationAlert('Error sending notification', 'error'); }
+        finally  { setLoading(false); }
     };
 
     const handleCreateAutoNotification = async () => {
@@ -411,18 +472,20 @@ const MedicalAdminDashboard = () => {
         try {
             const token = localStorage.getItem('authToken');
             const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications`, {
-                method: 'POST',
+                method:  'POST',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify(autoFormData),
+                body:    JSON.stringify(autoFormData),
             });
             if (res.ok) {
                 showNotificationAlert('Auto-notification created!');
                 setAutoFormData({ trigger: 'appointment_scheduled', title: '', message: '', type: 'appointment', enabled: true, delayMinutes: 0 });
                 setShowAutoNotificationForm(false);
                 loadAutoNotifications();
-            } else { showNotificationAlert('Failed to create auto-notification', 'error'); }
-        } catch (err) { showNotificationAlert('Error creating auto-notification', 'error'); }
-        finally { setLoading(false); }
+            } else {
+                showNotificationAlert('Failed to create auto-notification', 'error');
+            }
+        } catch { showNotificationAlert('Error creating auto-notification', 'error'); }
+        finally  { setLoading(false); }
     };
 
     const handleDeleteNotification = async (id) => {
@@ -430,9 +493,12 @@ const MedicalAdminDashboard = () => {
         try {
             const token = localStorage.getItem('authToken');
             const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/notifications/${id}`, {
-                method: 'DELETE', headers: { Authorization: `Bearer ${token}` }
+                method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
             });
-            if (res.ok) { setNotifications(notifications.filter(n => n.id !== id)); showNotificationAlert('Notification deleted'); }
+            if (res.ok) {
+                setNotifications(notifications.filter(n => n.id !== id));
+                showNotificationAlert('Notification deleted');
+            }
         } catch (err) { console.error(err); }
     };
 
@@ -440,9 +506,9 @@ const MedicalAdminDashboard = () => {
         try {
             const token = localStorage.getItem('authToken');
             const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications/${id}/toggle`, {
-                method: 'PUT',
+                method:  'PUT',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: !current }),
+                body:    JSON.stringify({ enabled: !current }),
             });
             if (res.ok) loadAutoNotifications();
         } catch (err) { console.error(err); }
@@ -453,9 +519,12 @@ const MedicalAdminDashboard = () => {
         try {
             const token = localStorage.getItem('authToken');
             const res = await fetch(`${CONFIG.ADMIN_API_URL}/api/admin/auto-notifications/${id}`, {
-                method: 'DELETE', headers: { Authorization: `Bearer ${token}` }
+                method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
             });
-            if (res.ok) { setAutoNotifications(autoNotifications.filter(n => n.id !== id)); showNotificationAlert('Auto-notification deleted'); }
+            if (res.ok) {
+                setAutoNotifications(autoNotifications.filter(n => n.id !== id));
+                showNotificationAlert('Auto-notification deleted');
+            }
         } catch (err) { console.error(err); }
     };
 
@@ -467,13 +536,21 @@ const MedicalAdminDashboard = () => {
     });
 
     const getTriggerLabel = (t) => ({
-        appointment_scheduled: 'Appointment Scheduled', results_ready: 'Results Ready',
-        appointment_reminder: 'Appointment Reminder', test_booked: 'Test Booked',
-        payment_approved: 'Payment Approved', appointment_missed: 'Appointment Missed',
+        appointment_scheduled: 'Appointment Scheduled',
+        results_ready:         'Results Ready',
+        appointment_reminder:  'Appointment Reminder',
+        test_booked:           'Test Booked',
+        payment_approved:      'Payment Approved',
+        appointment_missed:    'Appointment Missed',
     }[t] || t);
 
-    const getTypeIcon = (t) => ({ appointment: '📅', results: '📊', alert: '⚠️', reminder: '🔔', payment: '💰' }[t] || '📬');
-    const getCurrentUser = () => { try { return JSON.parse(localStorage.getItem('user_info') || '{}'); } catch { return {}; } };
+    const getTypeIcon = (t) => ({
+        appointment: '📅', results: '📊', alert: '⚠️', reminder: '🔔', payment: '💰',
+    }[t] || '📬');
+
+    const getCurrentUser = () => {
+        try { return JSON.parse(localStorage.getItem('user_info') || '{}'); } catch { return {}; }
+    };
 
     // ── Guards ────────────────────────────────────────────────────────────────
     if (validatingToken) {
@@ -489,7 +566,6 @@ const MedicalAdminDashboard = () => {
     // ── Render ────────────────────────────────────────────────────────────────
     return (
         <div className="dashboard" style={{ display: 'flex', minHeight: '100vh' }}>
-            {/* Pulse animation for urgent support badge */}
             <style>{`
                 @keyframes pulse {
                     0%   { box-shadow: 0 0 0 0   rgba(239,68,68,0.6), 0 4px 14px rgba(239,68,68,0.4); }
@@ -497,6 +573,7 @@ const MedicalAdminDashboard = () => {
                     100% { box-shadow: 0 0 0 0   rgba(239,68,68,0),   0 4px 14px rgba(239,68,68,0.4); }
                 }
             `}</style>
+
             {React.createElement(Sidebar, { currentView, setCurrentView, onLogout: handleLogout })}
 
             <div className="main-content" style={{ flex: 1, overflowY: 'auto' }}>
@@ -514,7 +591,6 @@ const MedicalAdminDashboard = () => {
                     <div>
                         {React.createElement(StatsGrid, { stats })}
 
-                        {/* Pending payments banner */}
                         {stats.pendingPayments > 0 && (
                             <div style={{ margin: '0 20px 20px', padding: '14px 18px', background: '#fef3c7', border: '2px solid #fbbf24', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                 <div style={{ fontWeight: '700', color: '#92400e', fontSize: '15px' }}>
@@ -527,7 +603,6 @@ const MedicalAdminDashboard = () => {
                             </div>
                         )}
 
-                        {/* ── REFUND REQUESTS BANNER (non-clickable status only) ── */}
                         {stats.refundRequests > 0 && (
                             <div style={{ margin: '0 20px 20px', padding: '14px 18px', background: '#f3e8ff', border: '2px solid #a78bfa', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '12px' }}>
                                 <div style={{ fontSize: '22px' }}>🔄</div>
@@ -555,23 +630,19 @@ const MedicalAdminDashboard = () => {
                     </div>
                 )}
 
-                {/* ── PATIENTS ── */}
                 {currentView === 'patients' && React.createElement(PatientsView, {
                     patients: filteredPatients, searchQuery, setSearchQuery,
                     setSelectedPatient, setShowModal,
                     onUpdateAppointment: handleUpdateAppointment,
                 })}
 
-                {/* ── APPOINTMENTS ── */}
                 {currentView === 'appointments' && React.createElement(AppointmentsView, {
                     appointments, setShowModal,
                     onRefresh: () => { loadAppointments(); loadRefundRequests(); },
                 })}
 
-                {/* ── REPORTS ── */}
                 {currentView === 'reports' && React.createElement(ReportsView, { testResults, setShowModal })}
 
-                {/* ── NOTIFICATIONS ── */}
                 {currentView === 'notifications' && (
                     <div style={{ padding: '20px', maxWidth: '1200px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
@@ -580,7 +651,8 @@ const MedicalAdminDashboard = () => {
 
                         <div style={{ borderBottom: '1px solid #ccc', marginBottom: '20px' }}>
                             {['sent', 'auto'].map(tab => (
-                                <button key={tab} onClick={() => setNotificationTab(tab)} style={{ padding: '10px 20px', borderBottom: notificationTab === tab ? '3px solid #007bff' : 'none', background: 'none', border: 'none', cursor: 'pointer', fontWeight: notificationTab === tab ? 'bold' : 'normal' }}>
+                                <button key={tab} onClick={() => setNotificationTab(tab)}
+                                    style={{ padding: '10px 20px', borderBottom: notificationTab === tab ? '3px solid #007bff' : 'none', background: 'none', border: 'none', cursor: 'pointer', fontWeight: notificationTab === tab ? 'bold' : 'normal' }}>
                                     {tab === 'sent' ? 'Send Notifications' : 'Auto Notifications'}
                                 </button>
                             ))}
@@ -588,19 +660,23 @@ const MedicalAdminDashboard = () => {
 
                         {notificationTab === 'sent' && (
                             <div>
-                                <button onClick={() => setShowNotificationForm(!showNotificationForm)} style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginBottom: '20px' }}>
+                                <button onClick={() => setShowNotificationForm(!showNotificationForm)}
+                                    style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginBottom: '20px' }}>
                                     Send New Notification
                                 </button>
                                 {showNotificationForm && (
                                     <div style={{ background: '#f5f5f5', padding: '20px', borderRadius: '5px', marginBottom: '20px' }}>
                                         <label style={{ display: 'block', marginBottom: '10px' }}>
-                                            <input type="checkbox" checked={formData.sendToAll} onChange={e => setFormData({ ...formData, sendToAll: e.target.checked })} />
+                                            <input type="checkbox" checked={formData.sendToAll}
+                                                onChange={e => setFormData({ ...formData, sendToAll: e.target.checked })} />
                                             {' '}Send to All Patients
                                         </label>
                                         {!formData.sendToAll && (
                                             <div style={{ marginBottom: '10px' }}>
                                                 <label style={{ display: 'block', marginBottom: '5px' }}>Select Patient ({patients.length} available)</label>
-                                                <select value={formData.recipientId} onChange={e => setFormData({ ...formData, recipientId: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                                <select value={formData.recipientId}
+                                                    onChange={e => setFormData({ ...formData, recipientId: e.target.value })}
+                                                    style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
                                                     <option value="">Choose a patient...</option>
                                                     {patients.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.email})</option>)}
                                                 </select>
@@ -608,7 +684,9 @@ const MedicalAdminDashboard = () => {
                                         )}
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Type</label>
-                                            <select value={formData.type} onChange={e => setFormData({ ...formData, type: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                            <select value={formData.type}
+                                                onChange={e => setFormData({ ...formData, type: e.target.value })}
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
                                                 <option value="appointment">Appointment</option>
                                                 <option value="results">Results</option>
                                                 <option value="alert">Alert</option>
@@ -618,46 +696,66 @@ const MedicalAdminDashboard = () => {
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Title</label>
-                                            <input type="text" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} placeholder="Title" maxLength="100" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
+                                            <input type="text" value={formData.title}
+                                                onChange={e => setFormData({ ...formData, title: e.target.value })}
+                                                placeholder="Title" maxLength="100"
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Message</label>
-                                            <textarea value={formData.message} onChange={e => setFormData({ ...formData, message: e.target.value })} placeholder="Message" maxLength="500" rows="4" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
+                                            <textarea value={formData.message}
+                                                onChange={e => setFormData({ ...formData, message: e.target.value })}
+                                                placeholder="Message" maxLength="500" rows="4"
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
                                         </div>
-                                        <button onClick={handleSendNotification} disabled={loading} style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}>
+                                        <button onClick={handleSendNotification} disabled={loading}
+                                            style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}>
                                             {loading ? 'Sending...' : 'Send'}
                                         </button>
-                                        <button onClick={() => setShowNotificationForm(false)} style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Cancel</button>
+                                        <button onClick={() => setShowNotificationForm(false)}
+                                            style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+                                            Cancel
+                                        </button>
                                     </div>
                                 )}
                                 <div style={{ marginTop: '20px' }}>
                                     <h3>Sent Notifications ({notifications.length})</h3>
-                                    {notifications.length === 0 ? <p>No notifications sent</p> : notifications.map(notif => (
-                                        <div key={notif.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                                                <div>
-                                                    <h4 style={{ margin: '0 0 5px' }}>{notif.title}</h4>
-                                                    <p style={{ margin: '0 0 5px', color: '#666' }}>{notif.message}</p>
-                                                    <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>To: {notif.recipientName || 'All Patients'} | {new Date(notif.createdAt).toLocaleString()}</p>
+                                    {notifications.length === 0
+                                        ? <p>No notifications sent</p>
+                                        : notifications.map(notif => (
+                                            <div key={notif.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                                                    <div>
+                                                        <h4 style={{ margin: '0 0 5px' }}>{notif.title}</h4>
+                                                        <p style={{ margin: '0 0 5px', color: '#666' }}>{notif.message}</p>
+                                                        <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>
+                                                            To: {notif.recipientName || 'All Patients'} | {new Date(notif.createdAt).toLocaleString()}
+                                                        </p>
+                                                    </div>
+                                                    <button onClick={() => handleDeleteNotification(notif.id)}
+                                                        style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+                                                        Delete
+                                                    </button>
                                                 </div>
-                                                <button onClick={() => handleDeleteNotification(notif.id)} style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Delete</button>
                                             </div>
-                                        </div>
-                                    ))}
+                                        ))}
                                 </div>
                             </div>
                         )}
 
                         {notificationTab === 'auto' && (
                             <div>
-                                <button onClick={() => setShowAutoNotificationForm(!showAutoNotificationForm)} style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginBottom: '20px' }}>
+                                <button onClick={() => setShowAutoNotificationForm(!showAutoNotificationForm)}
+                                    style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginBottom: '20px' }}>
                                     Create Auto Notification
                                 </button>
                                 {showAutoNotificationForm && (
                                     <div style={{ background: '#f5f5f5', padding: '20px', borderRadius: '5px', marginBottom: '20px' }}>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Trigger Event</label>
-                                            <select value={autoFormData.trigger} onChange={e => setAutoFormData({ ...autoFormData, trigger: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                            <select value={autoFormData.trigger}
+                                                onChange={e => setAutoFormData({ ...autoFormData, trigger: e.target.value })}
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
                                                 <option value="appointment_scheduled">Appointment Scheduled</option>
                                                 <option value="results_ready">Results Ready</option>
                                                 <option value="appointment_reminder">Appointment Reminder</option>
@@ -668,11 +766,16 @@ const MedicalAdminDashboard = () => {
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Delay (minutes)</label>
-                                            <input type="number" value={autoFormData.delayMinutes} onChange={e => setAutoFormData({ ...autoFormData, delayMinutes: parseInt(e.target.value) || 0 })} min="0" max="1440" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
+                                            <input type="number" value={autoFormData.delayMinutes}
+                                                onChange={e => setAutoFormData({ ...autoFormData, delayMinutes: parseInt(e.target.value) || 0 })}
+                                                min="0" max="1440"
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Type</label>
-                                            <select value={autoFormData.type} onChange={e => setAutoFormData({ ...autoFormData, type: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
+                                            <select value={autoFormData.type}
+                                                onChange={e => setAutoFormData({ ...autoFormData, type: e.target.value })}
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }}>
                                                 <option value="appointment">Appointment</option>
                                                 <option value="results">Results</option>
                                                 <option value="alert">Alert</option>
@@ -682,42 +785,60 @@ const MedicalAdminDashboard = () => {
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Title</label>
-                                            <input type="text" value={autoFormData.title} onChange={e => setAutoFormData({ ...autoFormData, title: e.target.value })} placeholder="Title" maxLength="100" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
+                                            <input type="text" value={autoFormData.title}
+                                                onChange={e => setAutoFormData({ ...autoFormData, title: e.target.value })}
+                                                placeholder="Title" maxLength="100"
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc' }} />
                                         </div>
                                         <div style={{ marginBottom: '10px' }}>
                                             <label style={{ display: 'block', marginBottom: '5px' }}>Message</label>
-                                            <textarea value={autoFormData.message} onChange={e => setAutoFormData({ ...autoFormData, message: e.target.value })} placeholder="Message" maxLength="500" rows="4" style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
+                                            <textarea value={autoFormData.message}
+                                                onChange={e => setAutoFormData({ ...autoFormData, message: e.target.value })}
+                                                placeholder="Message" maxLength="500" rows="4"
+                                                style={{ width: '100%', padding: '8px', borderRadius: '5px', border: '1px solid #ccc', fontFamily: 'Arial' }} />
                                         </div>
-                                        <button onClick={handleCreateAutoNotification} disabled={loading} style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}>
+                                        <button onClick={handleCreateAutoNotification} disabled={loading}
+                                            style={{ padding: '10px 20px', background: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}>
                                             {loading ? 'Creating...' : 'Create'}
                                         </button>
-                                        <button onClick={() => setShowAutoNotificationForm(false)} style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Cancel</button>
+                                        <button onClick={() => setShowAutoNotificationForm(false)}
+                                            style={{ padding: '10px 20px', background: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+                                            Cancel
+                                        </button>
                                     </div>
                                 )}
                                 <div style={{ marginTop: '20px' }}>
                                     <h3>Auto Notifications</h3>
-                                    {autoNotifications.length === 0 ? <p>No auto notifications configured</p> : autoNotifications.map(an => (
-                                        <div key={an.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                                                <div style={{ flex: 1 }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
-                                                        <h4 style={{ margin: 0, marginRight: '10px' }}>{an.title}</h4>
-                                                        <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '12px', background: an.enabled ? '#d4edda' : '#f8d7da', color: an.enabled ? '#155724' : '#721c24' }}>
-                                                            {an.enabled ? 'Active' : 'Disabled'}
-                                                        </span>
+                                    {autoNotifications.length === 0
+                                        ? <p>No auto notifications configured</p>
+                                        : autoNotifications.map(an => (
+                                            <div key={an.id} style={{ background: '#fff', border: '1px solid #ddd', padding: '15px', marginBottom: '10px', borderRadius: '5px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                                                    <div style={{ flex: 1 }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '5px' }}>
+                                                            <h4 style={{ margin: 0, marginRight: '10px' }}>{an.title}</h4>
+                                                            <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '12px', background: an.enabled ? '#d4edda' : '#f8d7da', color: an.enabled ? '#155724' : '#721c24' }}>
+                                                                {an.enabled ? 'Active' : 'Disabled'}
+                                                            </span>
+                                                        </div>
+                                                        <p style={{ margin: '5px 0', color: '#666' }}>{an.message}</p>
+                                                        <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>
+                                                            Trigger: {getTriggerLabel(an.trigger)} | Delay: {an.delayMinutes} min | {getTypeIcon(an.type)} {an.type}
+                                                        </p>
                                                     </div>
-                                                    <p style={{ margin: '5px 0', color: '#666' }}>{an.message}</p>
-                                                    <p style={{ margin: 0, fontSize: '12px', color: '#999' }}>Trigger: {getTriggerLabel(an.trigger)} | Delay: {an.delayMinutes} min | {getTypeIcon(an.type)} {an.type}</p>
-                                                </div>
-                                                <div style={{ display: 'flex', gap: '5px' }}>
-                                                    <button onClick={() => handleToggleAutoNotification(an.id, an.enabled)} style={{ padding: '5px 10px', background: an.enabled ? '#ffc107' : '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
-                                                        {an.enabled ? 'Disable' : 'Enable'}
-                                                    </button>
-                                                    <button onClick={() => handleDeleteAutoNotification(an.id)} style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Delete</button>
+                                                    <div style={{ display: 'flex', gap: '5px' }}>
+                                                        <button onClick={() => handleToggleAutoNotification(an.id, an.enabled)}
+                                                            style={{ padding: '5px 10px', background: an.enabled ? '#ffc107' : '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+                                                            {an.enabled ? 'Disable' : 'Enable'}
+                                                        </button>
+                                                        <button onClick={() => handleDeleteAutoNotification(an.id)}
+                                                            style={{ padding: '5px 10px', background: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+                                                            Delete
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
-                                        </div>
-                                    ))}
+                                        ))}
                                 </div>
                             </div>
                         )}
@@ -729,15 +850,15 @@ const MedicalAdminDashboard = () => {
             {showModal === 'add-result' && React.createElement(AddResultModal, {
                 patients, appointments,
                 onClose: () => setShowModal(null),
-                onAdd: handleAddResult,
+                onAdd:   handleAddResult,
                 showNotification: showNotificationAlert,
             })}
 
             {showModal === 'patient-details' && selectedPatient && React.createElement(PatientDetailsModal, {
-                patient: selectedPatient,
-                testResults: testResults.filter(r => r.patientId === selectedPatient.id),
+                patient:      selectedPatient,
+                testResults:  testResults.filter(r => r.patientId === selectedPatient.id),
                 appointments: appointments.filter(a => a.patientId === selectedPatient.id),
-                onClose: () => { setShowModal(null); setSelectedPatient(null); },
+                onClose:      () => { setShowModal(null); setSelectedPatient(null); },
                 showNotification: showNotificationAlert,
                 loadTestResults,
             })}
@@ -746,73 +867,68 @@ const MedicalAdminDashboard = () => {
                 onClose: () => {
                     setShowSupportChat(false);
                     setSupportChatPatient(null);
-                    setChatUnreadCount(0);
+                    // Do NOT reset chatUnreadCount here — let loadChatUnreadCount
+                    // set it correctly on the next tick (10 s interval)
+                    loadChatUnreadCount();
                 },
-                isAdmin: true,
-                currentUser: getCurrentUser(),
+                isAdmin:         true,
+                currentUser:     getCurrentUser(),
                 selectedPatient: supportChatPatient,
             })}
 
-            {/* Floating support button WITH unread badge */}
+            {/* ── Floating support button ── */}
             {!showSupportChat && (
                 <button
                     onClick={() => {
                         setSupportChatPatient(null);
                         setShowSupportChat(true);
-                        setChatUnreadCount(0);
+                        // Do NOT set chatUnreadCount = 0 here.
+                        // The modal's first loadConversations() will emit the real count.
                     }}
                     title="Open Patient Support Chat"
                     style={{
-                        position: 'fixed', bottom: '24px', right: '24px',
-                        width: '56px', height: '56px', borderRadius: '50%',
+                        position:        'fixed', bottom: '24px', right: '24px',
+                        width:           '56px',  height: '56px',
+                        borderRadius:    '50%',
                         backgroundColor: chatUnreadCount > 0 ? '#ef4444' : '#3b82f6',
-                        color: 'white', border: 'none',
-                        cursor: 'pointer', display: 'flex', alignItems: 'center',
-                        justifyContent: 'center', fontSize: '20px',
-                        boxShadow: chatUnreadCount > 0
+                        color:           'white', border: 'none',
+                        cursor:          'pointer', display: 'flex',
+                        alignItems:      'center', justifyContent: 'center',
+                        fontSize:        '20px',
+                        boxShadow:       chatUnreadCount > 0
                             ? '0 0 0 4px rgba(239,68,68,0.3), 0 4px 14px rgba(239,68,68,0.5)'
                             : '0 4px 14px rgba(59,130,246,0.5)',
-                        zIndex: 999,
-                        transition: 'transform 0.15s, background-color 0.3s, box-shadow 0.3s',
-                        animation: chatUnreadCount > 0 ? 'pulse 1.5s infinite' : 'none',
+                        zIndex:          999,
+                        transition:      'transform 0.15s, background-color 0.3s, box-shadow 0.3s',
+                        animation:       chatUnreadCount > 0 ? 'pulse 1.5s infinite' : 'none',
                     }}
                     onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)';   }}
                 >
                     <i className={chatUnreadCount > 0 ? 'fas fa-exclamation' : 'fas fa-headset'}></i>
+
                     {chatUnreadCount > 0 && (
                         <span style={{
-                            position: 'absolute',
-                            top: '-6px', right: '-6px',
-                            minWidth: '22px', height: '22px',
-                            borderRadius: '11px',
-                            backgroundColor: '#fbbf24',
-                            color: '#1f2937',
-                            fontSize: '11px',
-                            fontWeight: '900',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: '0 4px',
-                            border: '2px solid white',
-                            zIndex: 1000,
+                            position:        'absolute', top: '-6px', right: '-6px',
+                            minWidth:        '22px',     height: '22px',
+                            borderRadius:    '11px',
+                            backgroundColor: '#fbbf24', color: '#1f2937',
+                            fontSize:        '11px',    fontWeight: '900',
+                            display:         'flex',    alignItems: 'center', justifyContent: 'center',
+                            padding:         '0 4px',   border: '2px solid white',
+                            zIndex:          1000,
                         }}>
                             {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
                         </span>
                     )}
-                    {/* Tooltip label when badge is active */}
+
                     {chatUnreadCount > 0 && (
                         <span style={{
-                            position: 'absolute',
-                            right: '64px',
-                            backgroundColor: '#1f2937',
-                            color: 'white',
-                            fontSize: '12px',
-                            fontWeight: '600',
-                            padding: '5px 10px',
-                            borderRadius: '6px',
-                            whiteSpace: 'nowrap',
-                            pointerEvents: 'none',
+                            position:        'absolute', right: '64px',
+                            backgroundColor: '#1f2937',  color: 'white',
+                            fontSize:        '12px',     fontWeight: '600',
+                            padding:         '5px 10px', borderRadius: '6px',
+                            whiteSpace:      'nowrap',   pointerEvents: 'none',
                         }}>
                             {chatUnreadCount} patient{chatUnreadCount > 1 ? 's need' : ' needs'} help
                         </span>
@@ -822,4 +938,5 @@ const MedicalAdminDashboard = () => {
         </div>
     );
 };
+
 window.MedicalAdminDashboard = MedicalAdminDashboard;
