@@ -1,3 +1,5 @@
+const PatientItem = window.PatientItem;
+
 const MainPanel = ({ patients, searchQuery, setSearchQuery, setSelectedPatient, setShowModal, onUpdateAppointment }) => {
     return (
         <div className="content-card">
@@ -36,3 +38,5 @@ const MainPanel = ({ patients, searchQuery, setSearchQuery, setSelectedPatient, 
         </div>
     );
 };
+
+window.MainPanel = MainPanel;

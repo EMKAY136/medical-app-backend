@@ -1,14 +1,3 @@
-// admin-websocket-v3.js — Production-grade WebSocket manager
-// ─────────────────────────────────────────────────────────────
-// KEY FIXES vs previous version:
-//  1. Badge is NEVER incremented by WS events — only synced from loadConversations()
-//     result via 'supportConversationsLoaded' CustomEvent. Eliminates phantom counts
-//     on reconnect and stale-ticket ghost badges.
-//  2. Dedup set persisted in sessionStorage — reconnects can't replay events.
-//  3. SESSION_ENDED clears the user's dedup entry so future real requests show up.
-//  4. _getClearedIds() shared logic extracted to avoid sessionStorage read repetition.
-//  5. All support WS events dispatch CustomEvents only — badge update is the
-//     dashboard's responsibility after consulting the DB, not the WS client's.
 
 const AdminWebSocket = (() => {
 
