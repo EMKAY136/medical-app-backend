@@ -460,79 +460,78 @@ const ChatSupportModal = ({ onClose, isAdmin = false, currentUser, selectedPatie
 
     // ── Send message ──────────────────────────────────────────────────────────
     const sendMessage = async () => {
-        const text = newMessage.trim();
-        if (!text || sendingRef.current) return;
+    const text = newMessage.trim();
+    if (!text) return;
 
-        sendingRef.current = true;
-        setNewMessage('');
+    setNewMessage('');
 
-        const tempId = 'temp_' + Date.now();
-        setMessages(prev => [...prev, {
-            id:         tempId,
-            senderId:   isAdmin ? 'admin' : currentUser?.id,
-            senderName: isAdmin
-                ? (currentUser?.name || currentUser?.firstName || 'Medical Support')
-                : ((currentUser?.firstName || '') + ' ' + (currentUser?.lastName || '')).trim(),
-            senderType: isAdmin ? 'SUPPORT_AGENT' : 'USER',
-            message:    text,
-            timestamp:  new Date(),
-            status:     'sending',
-        }]);
+    const tempId = 'temp_' + Date.now();
+    setMessages(prev => [...prev, {
+        id:         tempId,
+        senderId:   isAdmin ? 'admin' : currentUser?.id,
+        senderName: isAdmin
+            ? (currentUser?.name || currentUser?.firstName || 'Medical Support')
+            : ((currentUser?.firstName || '') + ' ' + (currentUser?.lastName || '')).trim(),
+        senderType: isAdmin ? 'SUPPORT_AGENT' : 'USER',
+        message:    text,
+        timestamp:  new Date(),
+        status:     'sending',
+    }]);
 
-        try {
-            let res;
-            if (isAdmin) {
-                const conv = activeConvRef.current;
-                if (!conv?.userId) throw new Error('No patient selected');
-                res = await fetch(CONFIG.ADMIN_API_URL + '/api/support/admin/reply', {
-                    method:  'POST',
-                    headers: getHeaders(),
-                    body:    JSON.stringify({ userId: conv.userId, message: text, ticketId: conv.ticketId || null }),
-                });
-            } else {
-                res = await fetch(CONFIG.API_BASE_URL + '/api/support/chat/message', {
-                    method:  'POST',
-                    headers: getHeaders(),
-                    body:    JSON.stringify({ message: text }),
-                });
-            }
-
-            if (!res.ok) throw new Error('Server error ' + res.status);
-            const data = await res.json();
-
-            if (data.success) {
-                setMessages(prev => prev.map(m =>
-                    m.id === tempId
-                        ? { ...m, status: 'delivered', id: data.messageId || m.id }
-                        : m
-                ));
-                if (!isAdmin && data.botResponse) {
-                    setTimeout(() => setMessages(prev => [...prev, {
-                        id:         'bot_' + Date.now(),
-                        senderId:   'bot',
-                        senderName: 'Medical Support Bot',
-                        senderType: 'BOT',
-                        message:    data.botResponse,
-                        timestamp:  new Date(),
-                    }]), 400);
-                }
-                const conv = activeConvRef.current;
-                setTimeout(() => {
-                    if (isAdmin && conv?.userId) loadMessagesForUser(conv.userId, true);
-                    else if (!isAdmin) loadPatientHistory(true);
-                }, 600);
-            } else {
-                throw new Error(data.message || 'Send failed');
-            }
-        } catch (e) {
-            console.error('[Chat] sendMessage error:', e);
-            setMessages(prev => prev.filter(m => m.id !== tempId));
-            alert('Failed to send: ' + e.message);
-        } finally {
-            sendingRef.current = false;
-            setTimeout(() => messageInputRef.current?.focus(), 50);
+    try {
+        let res;
+        if (isAdmin) {
+            const conv = activeConvRef.current;
+            if (!conv?.userId) throw new Error('No patient selected');
+            res = await fetch(CONFIG.ADMIN_API_URL + '/api/support/admin/reply', {
+                method:  'POST',
+                headers: getHeaders(),
+                body:    JSON.stringify({ userId: conv.userId, message: text, ticketId: conv.ticketId || null }),
+            });
+        } else {
+            res = await fetch(CONFIG.API_BASE_URL + '/api/support/chat/message', {
+                method:  'POST',
+                headers: getHeaders(),
+                body:    JSON.stringify({ message: text }),
+            });
         }
-    };
+
+        if (!res.ok) throw new Error('Server error ' + res.status);
+        const data = await res.json();
+
+        if (data.success) {
+            setMessages(prev => prev.map(m =>
+                m.id === tempId
+                    ? { ...m, status: 'delivered', id: data.messageId || m.id }
+                    : m
+            ));
+            if (!isAdmin && data.botResponse) {
+                setTimeout(() => setMessages(prev => [...prev, {
+                    id:         'bot_' + Date.now(),
+                    senderId:   'bot',
+                    senderName: 'Medical Support Bot',
+                    senderType: 'BOT',
+                    message:    data.botResponse,
+                    timestamp:  new Date(),
+                }]), 400);
+            }
+            const conv = activeConvRef.current;
+            setTimeout(() => {
+                if (isAdmin && conv?.userId) loadMessagesForUser(conv.userId, true);
+                else if (!isAdmin) loadPatientHistory(true);
+            }, 600);
+        } else {
+            throw new Error(data.message || 'Send failed');
+        }
+    } catch (e) {
+        console.error('[Chat] sendMessage error:', e);
+        setMessages(prev => prev.filter(m => m.id !== tempId));
+        alert('Failed to send: ' + e.message);
+    } finally {
+        setTimeout(() => messageInputRef.current?.focus(), 50);
+    }
+};
+;
 
     const handleKeyPress = (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
