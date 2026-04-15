@@ -62,13 +62,10 @@ public class SupportService {
             catch (Exception e) { log("notify ticket failed: " + e.getMessage()); }
 
             // WebSocket → admin sidebar
-            // FIX: include ticketId in the event so admin-websocket.js can deduplicate
-            // by "NEW_TICKET:<ticketId>" rather than "NEW_TICKET:<userId>",
-            // which was causing false deduplication when the same user opened multiple tickets.
             try {
                 Map<String, Object> evt = new LinkedHashMap<>();
                 evt.put("event",        "NEW_TICKET");
-                evt.put("ticketId",     saved.getId());           // ← dedup key on client
+                evt.put("ticketId",     saved.getId());
                 evt.put("userId",       user.getId());
                 evt.put("userName",     fullName(user));
                 evt.put("ticketNumber", saved.getTicketNumber());
@@ -100,22 +97,26 @@ public class SupportService {
             if (isBlank(message)) return fail(response, "Message cannot be empty");
 
             ChatMessage chatMsg = new ChatMessage(user, message.trim(), ChatMessage.SenderType.USER);
-            // Constructor already sets senderName from user, but be explicit for clarity
             chatMsg.setSenderName(fullName(user));
             ChatMessage saved = chatMessageRepository.save(chatMsg);
 
+            // Detect human agent request in this message
+            boolean humanAgentRequested = isHumanAgentRequest(
+                Collections.singletonList(chatMsg)
+            );
+
             // WebSocket → admin new-message topic
-            // FIX: always include senderName so admin console log shows the patient name
             try {
                 Map<String, Object> evt = new LinkedHashMap<>();
-                evt.put("event",      "NEW_PATIENT_MESSAGE");
-                evt.put("userId",     user.getId());
-                evt.put("userName",   fullName(user));            // display in sidebar
-                evt.put("senderName", fullName(user));            // ← was missing, caused "| undefined" in log
-                evt.put("userEmail",  user.getEmail());
-                evt.put("message",    message.trim());
-                evt.put("messageId",  saved.getId());
-                evt.put("timestamp",  now());
+                evt.put("event",               "NEW_PATIENT_MESSAGE");
+                evt.put("userId",              user.getId());
+                evt.put("userName",            fullName(user));
+                evt.put("senderName",          fullName(user));
+                evt.put("userEmail",           user.getEmail());
+                evt.put("message",             message.trim());
+                evt.put("messageId",           saved.getId());
+                evt.put("timestamp",           now());
+                evt.put("humanAgentRequested", humanAgentRequested);
                 messagingTemplate.convertAndSend("/topic/admin/new-message", evt);
             } catch (Exception e) { log("WS patient msg failed: " + e.getMessage()); }
 
@@ -171,7 +172,7 @@ public class SupportService {
             agentMsg.setUser(patient);
             agentMsg.setSenderType(ChatMessage.SenderType.SUPPORT_AGENT);
             agentMsg.setMessage(message);
-            agentMsg.setSenderName(fullName(agent));             // always the real agent name
+            agentMsg.setSenderName(fullName(agent));
 
             if (ticketId != null) {
                 supportTicketRepository.findById(ticketId).ifPresent(ticket -> {
@@ -186,17 +187,14 @@ public class SupportService {
             ChatMessage saved = chatMessageRepository.save(agentMsg);
 
             // WebSocket → patient device
-            // FIX: send on BOTH user-specific channels so mobile SockJS (user-destination)
-            // and the global broadcast (/topic/notifications) both fire.
             try {
                 Map<String, Object> evt = new LinkedHashMap<>();
                 evt.put("event",      "NEW_AGENT_MESSAGE");
                 evt.put("message",    message);
                 evt.put("senderName", fullName(agent));
-                evt.put("agentName",  fullName(agent));           // alias for older mobile code
+                evt.put("agentName",  fullName(agent));
                 evt.put("messageId",  saved.getId());
                 evt.put("timestamp",  now());
-                // user-destination (requires spring security principal set to userId string)
                 messagingTemplate.convertAndSendToUser(userId.toString(), "/queue/messages",      evt);
                 messagingTemplate.convertAndSendToUser(userId.toString(), "/topic/notifications", evt);
             } catch (Exception e) { log("WS agent reply push failed: " + e.getMessage()); }
@@ -291,8 +289,6 @@ public class SupportService {
             } catch (Exception e) { log("WS admin SESSION_ENDED failed: " + e.getMessage()); }
 
             // 4. Notify patient device — SESSION_ENDED clears mobile UI immediately
-            // FIX: fire on BOTH queue and topic so the mobile app receives it regardless
-            // of which subscription it registered (useFocusEffect vs background subscribe).
             try {
                 Map<String, Object> patientEvt = new LinkedHashMap<>();
                 patientEvt.put("event",     "SESSION_ENDED");
@@ -320,80 +316,86 @@ public class SupportService {
     // GET ALL CHATS  (admin sidebar)
     // ═══════════════════════════════════════════════════════════════════════
     public Map<String, Object> getAllChats(UserDetails agentDetails) {
-    Map<String, Object> response = new HashMap<>();
-    try {
-        User agent = resolveUser(agentDetails, response);
-        if (agent == null) return response;
-        if (!hasRole(agent, "SUPPORT_AGENT") && !hasRole(agent, "ADMIN")) {
-            return fail(response, "Unauthorized: Not a support agent");
-        }
- 
-        List<Map<String, Object>> allChats   = new ArrayList<>();
-        Set<Long>                 seenUserIds = new HashSet<>();
- 
-        // ── KEY FIX: only active (OPEN + IN_PROGRESS) tickets ───────────────
-        // RESOLVED tickets are excluded — admin ended those sessions already.
-        List<SupportTicket> activeTickets = new ArrayList<>();
+        Map<String, Object> response = new HashMap<>();
         try {
-            activeTickets.addAll(
-                supportTicketRepository.findByStatusOrderByCreatedAtDesc(SupportTicket.TicketStatus.OPEN));
-            activeTickets.addAll(
-                supportTicketRepository.findByStatusOrderByCreatedAtDesc(SupportTicket.TicketStatus.IN_PROGRESS));
+            User agent = resolveUser(agentDetails, response);
+            if (agent == null) return response;
+            if (!hasRole(agent, "SUPPORT_AGENT") && !hasRole(agent, "ADMIN")) {
+                return fail(response, "Unauthorized: Not a support agent");
+            }
+
+            List<Map<String, Object>> allChats    = new ArrayList<>();
+            Set<Long>                 seenUserIds = new HashSet<>();
+
+            // ── Only active (OPEN + IN_PROGRESS) tickets ─────────────────────
+            List<SupportTicket> activeTickets = new ArrayList<>();
+            try {
+                activeTickets.addAll(
+                    supportTicketRepository.findByStatusOrderByCreatedAtDesc(SupportTicket.TicketStatus.OPEN));
+                activeTickets.addAll(
+                    supportTicketRepository.findByStatusOrderByCreatedAtDesc(SupportTicket.TicketStatus.IN_PROGRESS));
+            } catch (Exception e) {
+                log("⚠️ Status-filtered query failed, falling back to findAll: " + e.getMessage());
+                activeTickets = supportTicketRepository.findAll().stream()
+                    .filter(t -> t.getStatus() == SupportTicket.TicketStatus.OPEN
+                              || t.getStatus() == SupportTicket.TicketStatus.IN_PROGRESS)
+                    .collect(java.util.stream.Collectors.toList());
+            }
+
+            for (SupportTicket ticket : activeTickets) {
+                Long uid = ticket.getUser().getId();
+                if (seenUserIds.add(uid)) {
+                    allChats.add(createChatInfo(ticket, ticket.getStatus().name()));
+                }
+            }
+
+            // ── Chat-only users (no ticket, but have messages) ───────────────
+            List<ChatMessage> allMessages = chatMessageRepository.findAll();
+            Map<Long, List<ChatMessage>> byUser = new HashMap<>();
+            for (ChatMessage m : allMessages) {
+                byUser.computeIfAbsent(m.getUser().getId(), k -> new ArrayList<>()).add(m);
+            }
+
+            for (Map.Entry<Long, List<ChatMessage>> entry : byUser.entrySet()) {
+                Long uid = entry.getKey();
+                if (seenUserIds.add(uid)) {
+                    List<ChatMessage> userMsgs = entry.getValue();
+                    userMsgs.sort(Comparator.comparing(ChatMessage::getCreatedAt));
+
+                    boolean humanRequested = isHumanAgentRequest(userMsgs);
+
+                    userMsgs.stream()
+                        .max(Comparator.comparing(ChatMessage::getCreatedAt))
+                        .ifPresent(latest -> {
+                            Map<String, Object> info = createChatInfoFromMessage(
+                                latest,
+                                humanRequested ? "HUMAN_REQUESTED" : "CHAT_ONLY",
+                                humanRequested
+                            );
+                            info.put("totalMessages", userMsgs.size());
+                            allChats.add(info);
+                        });
+                }
+            }
+
+            allChats.sort((a, b) ->
+                ((String) b.get("lastActivity")).compareTo((String) a.get("lastActivity")));
+
+            response.put("success",    true);
+            response.put("chats",      allChats);
+            response.put("totalCount", allChats.size());
+            response.put("debug", Map.of(
+                "activeTickets", activeTickets.size(),
+                "totalMessages", allMessages.size(),
+                "uniqueUsers",   seenUserIds.size()));
+
         } catch (Exception e) {
-            // Fallback only if the repo method doesn't exist
-            log("⚠️ Status-filtered query failed, falling back to findAll: " + e.getMessage());
-            activeTickets = supportTicketRepository.findAll().stream()
-                .filter(t -> t.getStatus() == SupportTicket.TicketStatus.OPEN
-                          || t.getStatus() == SupportTicket.TicketStatus.IN_PROGRESS)
-                .collect(java.util.stream.Collectors.toList());
+            log("Error fetching all chats: " + e.getMessage());
+            e.printStackTrace();
+            fail(response, "Error fetching all chats: " + e.getMessage());
         }
- 
-        for (SupportTicket ticket : activeTickets) {
-            Long uid = ticket.getUser().getId();
-            if (seenUserIds.add(uid)) {
-                allChats.add(createChatInfo(ticket, ticket.getStatus().name()));
-            }
-        }
- 
-        // ── Chat-only users (no ticket, but have messages) ───────────────────
-        // If adminEndChatSession already deleted their messages, they won't appear.
-        List<ChatMessage> allMessages = chatMessageRepository.findAll();
-        Map<Long, List<ChatMessage>> byUser = new HashMap<>();
-        for (ChatMessage m : allMessages) {
-            byUser.computeIfAbsent(m.getUser().getId(), k -> new ArrayList<>()).add(m);
-        }
- 
-        for (Map.Entry<Long, List<ChatMessage>> entry : byUser.entrySet()) {
-            Long uid = entry.getKey();
-            if (seenUserIds.add(uid)) {
-                entry.getValue().stream()
-                    .max(Comparator.comparing(ChatMessage::getCreatedAt))
-                    .ifPresent(latest -> {
-                        Map<String, Object> info = createChatInfoFromMessage(latest, "CHAT_ONLY");
-                        info.put("totalMessages", entry.getValue().size());
-                        allChats.add(info);
-                    });
-            }
-        }
- 
-        allChats.sort((a, b) ->
-            ((String) b.get("lastActivity")).compareTo((String) a.get("lastActivity")));
- 
-        response.put("success",    true);
-        response.put("chats",      allChats);
-        response.put("totalCount", allChats.size());
-        response.put("debug", Map.of(
-            "activeTickets", activeTickets.size(),
-            "totalMessages", allMessages.size(),
-            "uniqueUsers",   seenUserIds.size()));
- 
-    } catch (Exception e) {
-        log("Error fetching all chats: " + e.getMessage());
-        e.printStackTrace();
-        fail(response, "Error fetching all chats: " + e.getMessage());
+        return response;
     }
-    return response;
-}
 
     // ═══════════════════════════════════════════════════════════════════════
     // SEARCH PATIENTS  (admin)
@@ -836,6 +838,27 @@ public class SupportService {
         }
     }
 
+    /** Returns true if any USER message in the list contains a human agent request phrase. */
+    private boolean isHumanAgentRequest(List<ChatMessage> messages) {
+        if (messages == null || messages.isEmpty()) return false;
+        for (ChatMessage m : messages) {
+            if (m.getSenderType() != ChatMessage.SenderType.USER) continue;
+            String content = (m.getMessage() != null ? m.getMessage() : "").toLowerCase();
+            if (content.contains("human agent")
+             || content.contains("human support")
+             || content.contains("live agent")
+             || content.contains("speak to human")
+             || content.contains("talk to human")
+             || content.contains("real person")
+             || content.contains("real human")
+             || content.contains("connect me to")
+             || content.contains("transfer me")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private String generateBotResponse(String msg) {
         if (msg.contains("booking") || msg.contains("appointment"))
             return "I can help with test booking. Check 'My Appointments' or call +234-XXX-XXXX. What specific issue are you experiencing?";
@@ -911,7 +934,13 @@ public class SupportService {
         return info;
     }
 
+    // Overload kept for backward compatibility (getActiveChats uses this signature)
     private Map<String, Object> createChatInfoFromMessage(ChatMessage message, String conversationType) {
+        return createChatInfoFromMessage(message, conversationType, false);
+    }
+
+    private Map<String, Object> createChatInfoFromMessage(
+            ChatMessage message, String conversationType, boolean humanRequested) {
         Map<String, Object> info = new LinkedHashMap<>();
         User user = message.getUser();
         info.put("userId",            user.getId());
@@ -919,11 +948,12 @@ public class SupportService {
         info.put("userEmail",         user.getEmail());
         info.put("ticketId",          null);
         info.put("ticketNumber",      null);
-        info.put("subject",           "Chat Conversation");
-        info.put("category",          "General");
-        info.put("priority",          "NORMAL");
-        info.put("status",            "CHAT_ACTIVE");
+        info.put("subject",           humanRequested ? "Human Agent Requested" : "Chat Conversation");
+        info.put("category",          humanRequested ? "Human Support"         : "General");
+        info.put("priority",          humanRequested ? "HIGH"                  : "NORMAL");
+        info.put("status",            humanRequested ? "NEEDS_RESPONSE"        : "CHAT_ACTIVE");
         info.put("conversationType",  conversationType);
+        info.put("humanRequested",    humanRequested);
         info.put("createdAt",         message.getCreatedAt().toString());
         info.put("lastActivity",      message.getCreatedAt().toString());
         info.put("assignedTo",        null);
