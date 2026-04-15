@@ -350,18 +350,27 @@ public class SupportController {
      * Admin ends a patient's session — deletes all their messages + tickets on both sides.
      * Notifies patient via WebSocket so their UI clears instantly.
      */
-    @PostMapping("/admin/end-session/{userId}")
-    public ResponseEntity<Map<String, Object>> adminEndSession(
-            @PathVariable Long userId,
-            @AuthenticationPrincipal UserDetails userDetails) {
-        System.out.println("=== ADMIN END SESSION === PatientId: " + userId + " | Admin: " + (userDetails != null ? userDetails.getUsername() : "null"));
-        if (userDetails == null) return unauth();
-        try {
-            return ok(supportService.adminEndChatSession(userId, userDetails));
-        } catch (Exception e) {
-            return err500("Error ending session: " + e.getMessage());
-        }
+   @PostMapping("/admin/end-session/{userId}")
+public ResponseEntity<?> adminEndChatSession(
+        @PathVariable Long userId,
+        @AuthenticationPrincipal UserDetails userDetails) {
+    try {
+        if (userDetails == null)
+            return ResponseEntity.status(401)
+                    .body(Map.of("success", false, "message", "Authentication required"));
+ 
+        Map<String, Object> result = supportService.adminEndChatSession(userId, userDetails);
+ 
+        if (Boolean.TRUE.equals(result.get("success")))
+            return ResponseEntity.ok(result);
+        else
+            return ResponseEntity.status(400).body(result);
+ 
+    } catch (Exception e) {
+        return ResponseEntity.status(500)
+                .body(Map.of("success", false, "message", "Error ending session: " + e.getMessage()));
     }
+}
 
     /**
      * GET /api/support/admin/dashboard

@@ -320,70 +320,80 @@ public class SupportService {
     // GET ALL CHATS  (admin sidebar)
     // ═══════════════════════════════════════════════════════════════════════
     public Map<String, Object> getAllChats(UserDetails agentDetails) {
-        Map<String, Object> response = new HashMap<>();
-        try {
-            User agent = resolveUser(agentDetails, response);
-            if (agent == null) return response;
-            if (!hasRole(agent, "SUPPORT_AGENT") && !hasRole(agent, "ADMIN")) {
-                return fail(response, "Unauthorized: Not a support agent");
-            }
-
-            List<Map<String, Object>> allChats   = new ArrayList<>();
-            Set<Long>                 seenUserIds = new HashSet<>();
-
-            // Only OPEN + IN_PROGRESS tickets
-            List<SupportTicket> active = new ArrayList<>();
-            try {
-                active.addAll(supportTicketRepository.findByStatusOrderByCreatedAtDesc(SupportTicket.TicketStatus.OPEN));
-                active.addAll(supportTicketRepository.findByStatusOrderByCreatedAtDesc(SupportTicket.TicketStatus.IN_PROGRESS));
-            } catch (Exception e) {
-                log("⚠️ Status-filtered query failed, falling back to findAll: " + e.getMessage());
-                active = supportTicketRepository.findAll();
-            }
-
-            for (SupportTicket ticket : active) {
-                Long uid = ticket.getUser().getId();
-                if (seenUserIds.add(uid)) {
-                    allChats.add(createChatInfo(ticket, ticket.getStatus().name()));
-                }
-            }
-
-            // Also include chat-only users (no active ticket but have messages)
-            List<ChatMessage> allMsgs = chatMessageRepository.findAll();
-            Map<Long, List<ChatMessage>> byUser = new HashMap<>();
-            for (ChatMessage m : allMsgs) {
-                byUser.computeIfAbsent(m.getUser().getId(), k -> new ArrayList<>()).add(m);
-            }
-
-            for (Map.Entry<Long, List<ChatMessage>> entry : byUser.entrySet()) {
-                Long uid = entry.getKey();
-                if (seenUserIds.add(uid)) {
-                    entry.getValue().stream()
-                            .max(Comparator.comparing(ChatMessage::getCreatedAt))
-                            .ifPresent(latest -> {
-                                Map<String, Object> info = createChatInfoFromMessage(latest, "CHAT_ONLY");
-                                info.put("totalMessages", entry.getValue().size());
-                                allChats.add(info);
-                            });
-                }
-            }
-
-            allChats.sort((a, b) -> ((String) b.get("lastActivity")).compareTo((String) a.get("lastActivity")));
-
-            response.put("success",    true);
-            response.put("chats",      allChats);
-            response.put("totalCount", allChats.size());
-            response.put("debug", Map.of(
-                    "activeTickets", active.size(),
-                    "totalMessages", allMsgs.size(),
-                    "uniqueUsers",   seenUserIds.size()));
-        } catch (Exception e) {
-            log("Error fetching all chats: " + e.getMessage());
-            e.printStackTrace();
-            fail(response, "Error fetching all chats: " + e.getMessage());
+    Map<String, Object> response = new HashMap<>();
+    try {
+        User agent = resolveUser(agentDetails, response);
+        if (agent == null) return response;
+        if (!hasRole(agent, "SUPPORT_AGENT") && !hasRole(agent, "ADMIN")) {
+            return fail(response, "Unauthorized: Not a support agent");
         }
-        return response;
+ 
+        List<Map<String, Object>> allChats   = new ArrayList<>();
+        Set<Long>                 seenUserIds = new HashSet<>();
+ 
+        // ── KEY FIX: only active (OPEN + IN_PROGRESS) tickets ───────────────
+        // RESOLVED tickets are excluded — admin ended those sessions already.
+        List<SupportTicket> activeTickets = new ArrayList<>();
+        try {
+            activeTickets.addAll(
+                supportTicketRepository.findByStatusOrderByCreatedAtDesc(SupportTicket.TicketStatus.OPEN));
+            activeTickets.addAll(
+                supportTicketRepository.findByStatusOrderByCreatedAtDesc(SupportTicket.TicketStatus.IN_PROGRESS));
+        } catch (Exception e) {
+            // Fallback only if the repo method doesn't exist
+            log("⚠️ Status-filtered query failed, falling back to findAll: " + e.getMessage());
+            activeTickets = supportTicketRepository.findAll().stream()
+                .filter(t -> t.getStatus() == SupportTicket.TicketStatus.OPEN
+                          || t.getStatus() == SupportTicket.TicketStatus.IN_PROGRESS)
+                .collect(java.util.stream.Collectors.toList());
+        }
+ 
+        for (SupportTicket ticket : activeTickets) {
+            Long uid = ticket.getUser().getId();
+            if (seenUserIds.add(uid)) {
+                allChats.add(createChatInfo(ticket, ticket.getStatus().name()));
+            }
+        }
+ 
+        // ── Chat-only users (no ticket, but have messages) ───────────────────
+        // If adminEndChatSession already deleted their messages, they won't appear.
+        List<ChatMessage> allMessages = chatMessageRepository.findAll();
+        Map<Long, List<ChatMessage>> byUser = new HashMap<>();
+        for (ChatMessage m : allMessages) {
+            byUser.computeIfAbsent(m.getUser().getId(), k -> new ArrayList<>()).add(m);
+        }
+ 
+        for (Map.Entry<Long, List<ChatMessage>> entry : byUser.entrySet()) {
+            Long uid = entry.getKey();
+            if (seenUserIds.add(uid)) {
+                entry.getValue().stream()
+                    .max(Comparator.comparing(ChatMessage::getCreatedAt))
+                    .ifPresent(latest -> {
+                        Map<String, Object> info = createChatInfoFromMessage(latest, "CHAT_ONLY");
+                        info.put("totalMessages", entry.getValue().size());
+                        allChats.add(info);
+                    });
+            }
+        }
+ 
+        allChats.sort((a, b) ->
+            ((String) b.get("lastActivity")).compareTo((String) a.get("lastActivity")));
+ 
+        response.put("success",    true);
+        response.put("chats",      allChats);
+        response.put("totalCount", allChats.size());
+        response.put("debug", Map.of(
+            "activeTickets", activeTickets.size(),
+            "totalMessages", allMessages.size(),
+            "uniqueUsers",   seenUserIds.size()));
+ 
+    } catch (Exception e) {
+        log("Error fetching all chats: " + e.getMessage());
+        e.printStackTrace();
+        fail(response, "Error fetching all chats: " + e.getMessage());
     }
+    return response;
+}
 
     // ═══════════════════════════════════════════════════════════════════════
     // SEARCH PATIENTS  (admin)
