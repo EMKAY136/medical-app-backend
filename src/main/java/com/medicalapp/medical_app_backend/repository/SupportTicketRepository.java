@@ -43,6 +43,9 @@ public interface SupportTicketRepository extends JpaRepository<SupportTicket, Lo
     // Find tickets by user and status
     List<SupportTicket> findByUserAndStatusOrderByCreatedAtDesc(User user, SupportTicket.TicketStatus status);
 
+    // Find tickets by user matching any of the given statuses
+    List<SupportTicket> findByUserAndStatusIn(User user, List<SupportTicket.TicketStatus> statuses);
+
     // Find recent tickets (last 7 days)
     @Query("SELECT t FROM SupportTicket t WHERE t.createdAt >= :dateLimit ORDER BY t.createdAt DESC")
     List<SupportTicket> findRecentTickets(@Param("dateLimit") LocalDateTime dateLimit);
