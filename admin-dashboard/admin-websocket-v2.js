@@ -8,7 +8,7 @@ const AdminWebSocket = (() => {
 
     let stompClient        = null;
     let connected          = false;
-    let subscribed         = false;   // ← NEW: prevents double-subscribe
+    let subscribed         = false;
     let reconnectAttempts  = 0;
     let reconnectTimer     = null;
     const MAX_RECONNECTS   = 8;
@@ -39,9 +39,6 @@ const AdminWebSocket = (() => {
         ssSet(CLEARED_IDS_KEY, arr);
     }
 
-    // ── NEW: Remove a userId from the cleared set ────────────────────────────
-    // Called when a new message or ticket arrives from a previously-cleared
-    // patient, indicating they started a fresh session.
     function removeClearedId(userId) {
         const uid = Number(userId);
         const arr = ssGet(CLEARED_IDS_KEY, []).filter(id => Number(id) !== uid);
@@ -99,23 +96,40 @@ const AdminWebSocket = (() => {
         const userId = Number(data.userId);
 
         // ── SESSION_ENDED ────────────────────────────────────────────────────
+        // FIX v3: Only add to cleared list if admin explicitly ended the session.
+        // Automatic/passive SESSION_ENDED events no longer suppress the badge,
+        // preventing the race condition where SESSION_ENDED fires after a new
+        // human-request message and hides the badge.
         if (event === 'SESSION_ENDED') {
             console.log('[WS] 🔴 SESSION_ENDED for userId:', userId);
 
-            addClearedId(userId);
-            clearShownEventsForUser(userId);
+            const isAdminInitiated = (
+                data.initiatedBy === 'ADMIN' ||
+                data.source === 'admin' ||
+                data.endedBy === 'admin'
+            );
+
+            if (isAdminInitiated) {
+                addClearedId(userId);
+                clearShownEventsForUser(userId);
+                console.log('[WS] 🧹 Admin-initiated — cleared userId:', userId);
+            } else {
+                // Don't add to cleared — let loadChatUnreadCount pick up any
+                // active human requests from this user via the API.
+                console.log('[WS] ⏭️ Auto SESSION_ENDED — NOT clearing userId:', userId,
+                            '(badge will reflect API state)');
+            }
 
             window.dispatchEvent(new CustomEvent('patientSessionEnded', {
                 detail: { userId, timestamp: data.timestamp },
             }));
-
             window.dispatchEvent(new CustomEvent('requestConversationRefresh'));
             return;
         }
 
         // ── NEW_PATIENT_MESSAGE ──────────────────────────────────────────────
         if (event === 'NEW_PATIENT_MESSAGE') {
-            // FIX v2.1: If this patient was previously cleared (session ended),
+            // If this patient was previously cleared (session ended),
             // un-clear them — a new message means a new session has started.
             if (getClearedIds().has(userId)) {
                 removeClearedId(userId);
@@ -158,7 +172,20 @@ const AdminWebSocket = (() => {
         // Terminal events
         if (['SESSION_ENDED', 'TICKET_RESOLVED', 'TICKET_CLOSED'].includes(event)) {
             clearShownEventsForUser(userId);
-            if (event === 'SESSION_ENDED') addClearedId(userId);
+
+            // FIX v3: Only clear on admin-initiated SESSION_ENDED
+            if (event === 'SESSION_ENDED') {
+                const isAdminInitiated = (
+                    data.initiatedBy === 'ADMIN' ||
+                    data.source === 'admin' ||
+                    data.endedBy === 'admin'
+                );
+                if (isAdminInitiated) {
+                    addClearedId(userId);
+                    console.log('[WS] 🧹 Support: Admin-initiated SESSION_ENDED — cleared userId:', userId);
+                }
+            }
+
             window.dispatchEvent(new CustomEvent('supportEvent', { detail: data }));
             window.dispatchEvent(new CustomEvent('requestConversationRefresh'));
             return;
@@ -176,7 +203,7 @@ const AdminWebSocket = (() => {
         window.dispatchEvent(new CustomEvent('supportEvent', { detail: data }));
 
         if (event === 'NEW_TICKET' || event === 'LIVE_AGENT_NEEDED') {
-            // FIX v2.1: Un-clear the userId — a new ticket means a fresh session
+            // Un-clear the userId — a new ticket means a fresh session
             if (getClearedIds().has(userId)) {
                 removeClearedId(userId);
                 clearShownEventsForUser(userId);
@@ -203,10 +230,6 @@ const AdminWebSocket = (() => {
     }
 
     // ── Subscribe to all admin topics ─────────────────────────────────────────
-    // FIX v2.1: Extracted into a named function with a `subscribed` guard so
-    // subscriptions only happen once per connection, preventing the
-    // InvalidStateError that occurred when the callback fired before the
-    // transport was fully ready.
     function subscribeAll() {
         if (subscribed || !stompClient || !stompClient.connected) return;
         subscribed = true;
@@ -264,7 +287,6 @@ const AdminWebSocket = (() => {
             stompClient      = Stomp.over(socket);
             stompClient.debug = () => {};
 
-            // FIX v2.1: Reset subscribed flag before each connection attempt
             subscribed = false;
 
             stompClient.connect(
@@ -277,8 +299,6 @@ const AdminWebSocket = (() => {
                     reconnectAttempts = 0;
                     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
-                    // FIX v2.1: Small delay to ensure SockJS transport is fully
-                    // ready before subscribing — prevents InvalidStateError
                     setTimeout(() => {
                         try {
                             subscribeAll();
@@ -339,7 +359,7 @@ const AdminWebSocket = (() => {
         isConnected:    () => connected,
         getClearedIds,
         addClearedId,
-        removeClearedId,   // ← NEW: exposed so ChatSupportModal can also un-clear
+        removeClearedId,
 
         registerChatCallbacks({ onNewPatientMessage, onNewAgentMessage } = {}) {
             if (onNewPatientMessage) _onNewPatientMessage = onNewPatientMessage;
