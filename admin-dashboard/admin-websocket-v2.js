@@ -7,6 +7,10 @@ const AdminWebSocket = {
     reconnectAttempts: 0,
     maxReconnectAttempts: 5,
 
+    // Tracks IDs of live-agent/support events already shown this session.
+    // Prevents re-showing toasts for stale events when the socket reconnects.
+    _shownSupportEvents: new Set(),
+
     // Callbacks registered by the chat UI
     onNewPatientMessage: null,  // called when a patient sends a message
     onNewAgentMessage: null,    // called when an agent reply is confirmed
@@ -153,9 +157,31 @@ const AdminWebSocket = {
     handleSupportEvent: function (data) {
         console.log('🎫 Support event:', data.event);
 
+        // Build a unique key for this event so we can deduplicate across
+        // reconnects. Use ticketId when available, fall back to userId so that
+        // a stale "live agent needed" banner is never re-shown after a reload.
+        const dedupeKey = data.event + ':' + (data.ticketId || data.userId || 'unknown');
+
+        // Events that mark a session as finished should clear the dedup entry
+        // so a genuinely new request from the same user shows up correctly.
+        const terminalEvents = ['SESSION_ENDED', 'TICKET_RESOLVED', 'TICKET_CLOSED'];
+        if (terminalEvents.includes(data.event)) {
+            this._shownSupportEvents.delete(dedupeKey.replace(data.event, 'LIVE_AGENT_NEEDED'));
+            this._shownSupportEvents.delete(dedupeKey.replace(data.event, 'NEW_TICKET'));
+            window.dispatchEvent(new CustomEvent('supportEvent', { detail: data }));
+            return;
+        }
+
+        // For all other events, skip if we've already shown this one
+        if (this._shownSupportEvents.has(dedupeKey)) {
+            console.log('⏭️ Duplicate support event suppressed:', dedupeKey);
+            return;
+        }
+        this._shownSupportEvents.add(dedupeKey);
+
         window.dispatchEvent(new CustomEvent('supportEvent', { detail: data }));
 
-        if (data.event === 'NEW_TICKET') {
+        if (data.event === 'NEW_TICKET' || data.event === 'LIVE_AGENT_NEEDED') {
             this.showBrowserNotification(
                 'New Support Ticket',
                 `${data.userName || 'A patient'} opened a new ticket`
